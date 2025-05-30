@@ -1,0 +1,14 @@
+{
+  "Default (Speaker 0)": "en_speaker_0.npz",
+  "Storyteller (US Female)": "en_speaker_9.npz",
+  "Narrator (British Male)": "en_speaker_2.npz",
+  "Poetic (Soft Male)": "en_speaker_1.npz",
+  "Broadcaster (Energetic Male)": "en_speaker_3.npz",
+  "Conversational (Young Female)": "en_speaker_4.npz",
+  "Warm (Middle-Aged Female)": "en_speaker_5.npz",
+  "Deep (Baritone Male)": "en_speaker_6.npz",
+  "Bright (Upbeat Male)": "en_speaker_7.npz",
+  "Natural (Neutral Female)": "en_speaker_8.npz",
+  "Curious (Young Male)": "en_speaker_10.npz",
+  "Elegant (Refined Female)": "en_speaker_11.npz"
+}
