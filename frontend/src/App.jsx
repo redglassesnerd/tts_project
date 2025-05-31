@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
-import TagEditor from "./TagEditor";
 import axios from "axios";
+import TagEditor from "./TagEditor";
 // VITS-specific fields are now moved into App function.
 // --- Static Bark token list used for in‑editor autocomplete ---
 // (Only used when the selected voice model name contains "bark")
@@ -424,235 +424,95 @@ function AppInner({
         </div>
       </div>
 
-      <label className="block text-sm font-semibold mb-2">Add your text</label>
-      {selectedVoiceData?.model?.toLowerCase().includes("bark") ? (
-        <>
-          <TagEditor
-            value={text}
-            onChange={setText}
-            tokens={tokensList}
-            placeholder="Type or paste your narration here – type “[” to see token suggestions…"
-            className="w-full p-4 border rounded-xl mb-6 focus:ring-2 focus:ring-blue-500 min-h-[8rem]"
-          />
-        </>
-      ) : (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Type or paste your narration here"
-          className="w-full p-4 border rounded-xl mb-6 focus:ring-2 focus:ring-blue-500 min-h-[8rem] resize-none"
-        />
-      )}
 
-      {/* AI Enhance toggle and enhancement pane (only for Bark models) */}
-      {selectedVoiceData?.model?.toLowerCase().includes("bark") && (
-        <>
-          <label className="flex items-center gap-3 mb-6 cursor-pointer select-none">
-            <span className="text-sm font-medium">Enable AI&nbsp;Enhance</span>
-            <span className="relative inline-block w-10 align-middle select-none transition duration-200 ease-in">
-              <input
-                type="checkbox"
-                checked={smartEnhance}
-                onChange={(e) => setSmartEnhance(e.target.checked)}
-                className="sr-only"
-                id="ai-enhance-toggle"
-              />
-              <span
-                className={
-                  "block w-10 h-6 rounded-full transition-colors " +
-                  (smartEnhance ? "bg-blue-600" : "bg-gray-300")
-                }
-              ></span>
-              <span
-                className={
-                  "dot absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition transform " +
-                  (smartEnhance ? "translate-x-4" : "")
-                }
-              ></span>
-            </span>
-          </label>
-          {smartEnhance && (
-            <div className="mb-4">
-              <label className="block text-xs font-medium mb-1">
-                Add a prompt to help give the LLM more direction (optional)
-              </label>
-              <textarea
-                className="w-full p-3 border rounded-xl mb-2 focus:ring-2 focus:ring-purple-500 text-sm"
-                rows="3"
-                placeholder='Tell the assistant how the narration should feel… e.g. “dramatic and tense”'
-                value={enhancePrompt}
-                onChange={(e) => setEnhancePrompt(e.target.value)}
-                disabled={isEnhancing}
-              />
-              <button
-                type="button"
-                onClick={runEnhancement}
-                disabled={isEnhancing || !text.trim()}
-                className={`px-4 py-2 rounded-lg text-white ${
-                  isEnhancing
-                    ? "bg-gray-400 cursor-wait"
-                    : "bg-purple-600 hover:bg-purple-700"
-                }`}
-              >
-                {isEnhancing ? "Enhancing…" : "AI Enhance"}
-              </button>
-            </div>
+      {/* --- Text input and AI Enhance toggle grouped --- */}
+      <div className="mb-6">
+        <p className="text-base font-semibold mb-2">Add your text</p>
+        <div>
+          {selectedVoiceData?.model?.toLowerCase().includes("bark") ? (
+            <TagEditor
+              value={text}
+              onChange={setText}
+              tokens={tokensList}
+              placeholder="Type or paste your narration here – type “[” to see token suggestions…"
+              className="w-full p-4 border rounded-xl focus:ring-2 focus:ring-blue-500 min-h-[8rem]"
+            />
+          ) : (
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Type or paste your narration here"
+              className="w-full p-4 border rounded-xl focus:ring-2 focus:ring-blue-500 min-h-[8rem] resize-none"
+            />
           )}
-        </>
-      )}
-
-      {/* Speaker dropdown */}
-      {speakerList.length > 0 && !selectedVoiceData?.requires_speaker_wav && (
-        <div className="mb-6">
-          <label className="block text-sm font-semibold mb-2">👤 Speaker:</label>
-          <select
-            className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-blue-500"
-            value={speaker}
-            onChange={(e) => setSpeaker(e.target.value)}
-          >
-            {speakerList.map((sp) => (
-              <option key={sp} value={sp}>
-                {sp}
-              </option>
-            ))}
-          </select>
         </div>
-      )}
-
-
-      {/* Preset dropdown - moved above Bark tuning and relabelled */}
-      {presetList.length > 0 && (
-        <div className="mb-6">
-          <label className="block text-sm font-semibold mb-2">Select a Bark Voice:</label>
-          <select
-            className="w-full p-3 border rounded-xl focus:ring-2 focus:ring-blue-500"
-            value={voicePreset}
-            onChange={(e) => setVoicePreset(e.target.value)}
-          >
-            {presetList.map((p) => (
-              <option key={p} value={p}>
-                {barkPresets[p] || barkPresets[p?.split?.("/")?.pop?.()] || p.replace("en_speaker_", "Speaker ")}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* Bark advanced section */}
-      {selectedVoiceData?.model?.toLowerCase().includes("bark") && (
-        <div className="mb-6">
-          <h3 className="text-sm font-semibold mb-3">Bark Voice Tuning</h3>
-
-          <div className="flex gap-2 mb-4">
-            <button
-              type="button"
-              onClick={() => {
-                setBarkTemperature(0.4);
-                setBarkTopK(30);
-                setBarkTopP(0.85);
-              }}
-              className="px-3 py-1 text-xs rounded-lg bg-gray-200 hover:bg-gray-300"
-              title="Steady and easy to follow, ideal for step-by-step instructions"
-            >
-              Calm &amp; Clear
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBarkTemperature(0.7);
-                setBarkTopK(50);
-                setBarkTopP(0.9);
-              }}
-              className="px-3 py-1 text-xs rounded-lg bg-gray-200 hover:bg-gray-300"
-              title="A good balance between clarity and expression"
-            >
-              Balanced
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setBarkTemperature(0.9);
-                setBarkTopK(80);
-                setBarkTopP(0.95);
-              }}
-              className="px-3 py-1 text-xs rounded-lg bg-gray-200 hover:bg-gray-300"
-              title="Adds more variation and emotion, perfect for stories"
-            >
-              Expressive &amp; Varied
-            </button>
-          </div>
-
-          {/* Seed input for Bark */}
-          <label className="block text-xs font-medium mb-1">
-            Seed – Voice Variation (integer): {seed}
-          </label>
-          <input
-            type="number"
-            min="0"
-            max="999999"
-            value={seed}
-            onChange={(e) => setSeed(parseInt(e.target.value, 10))}
-            className="w-full mb-4 border rounded-xl p-2"
-          />
-
-          <label className="block text-xs font-medium mb-1">
-            Creativity – Temperature (temperature, 0-1 → creative): {barkTemperature.toFixed(2)}
-            <div className="relative inline-block group ml-1">
-              <span className="text-gray-500 cursor-pointer">?</span>
-              <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
-                0 = straightforward narration; 1 = highly imaginative and playful
+        {/* AI Enhance toggle and enhancement pane (only for Bark models) */}
+        {selectedVoiceData?.model?.toLowerCase().includes("bark") && (
+          <>
+            <label className="flex items-center gap-3 mb-6 cursor-pointer select-none">
+              <span className="text-sm font-medium">Enable AI Enhance</span>
+              <span className="relative inline-block w-10 align-middle select-none transition duration-200 ease-in">
+                <input
+                  type="checkbox"
+                  id="ai-enhance-toggle"
+                  className="sr-only"
+                  checked={smartEnhance}
+                  onChange={(e) => setSmartEnhance(e.target.checked)}
+                />
+                <span
+                  className={
+                    "block w-10 h-6 rounded-full transition-colors " +
+                    (smartEnhance ? "bg-blue-600" : "bg-gray-300")
+                  }
+                ></span>
+                <span
+                  className={
+                    "dot absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition transform " +
+                    (smartEnhance ? "translate-x-4" : "")
+                  }
+                ></span>
+              </span>
+            </label>
+            {smartEnhance && (
+              <div className="mb-4">
+                <label className="block text-xs font-medium mb-1">
+                  Add a prompt to help give the LLM more direction (optional)
+                </label>
+                <textarea
+                  className="w-full p-3 border rounded-xl mb-2 focus:ring-2 focus:ring-purple-500 text-sm"
+                  rows={3}
+                  placeholder='Tell the assistant how the narration should feel… e.g. “dramatic and tense”'
+                  value={enhancePrompt}
+                  onChange={(e) => setEnhancePrompt(e.target.value)}
+                  disabled={isEnhancing}
+                />
+                <button
+                  type="button"
+                  onClick={runEnhancement}
+                  disabled={isEnhancing || !text.trim()}
+                  className={`px-4 py-2 rounded-lg text-white ${
+                    isEnhancing
+                      ? "bg-gray-400 cursor-wait"
+                      : "bg-purple-600 hover:bg-purple-700"
+                  }`}
+                >
+                  {isEnhancing ? "Enhancing…" : "AI Enhance"}
+                </button>
               </div>
-            </div>
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value={barkTemperature}
-            onChange={(e) => setBarkTemperature(parseFloat(e.target.value))}
-            className="w-full mb-4 accent-blue-600"
-          />
+            )}
+          </>
+        )}
+      </div>
 
-          <label className="block text-xs font-medium mb-1">
-            Variation – Top-K (top_k, 0-100 → larger pool): {barkTopK}
-            <div className="relative inline-block group ml-1">
-              <span className="text-gray-500 cursor-pointer">?</span>
-              <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
-                How many of the most likely options to consider; low = focused, high = varied
-              </div>
-            </div>
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="1"
-            value={barkTopK}
-            onChange={(e) => setBarkTopK(parseInt(e.target.value, 10))}
-            className="w-full mb-4 accent-blue-600"
-          />
+      {/* --- Horizontal rule after input field --- */}
+      <hr className="my-4" />
 
-          <label className="block text-xs font-medium mb-1">
-            Diversity – Top-P (top_p, 0-1 → nucleus sampling): {barkTopP.toFixed(2)}
-            <div className="relative inline-block group ml-1">
-              <span className="text-gray-500 cursor-pointer">?</span>
-              <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
-                Include tokens until their cumulative probability reaches this value; low = precise, high = broad
-              </div>
-            </div>
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value={barkTopP}
-            onChange={(e) => setBarkTopP(parseFloat(e.target.value))}
-            className="w-full accent-blue-600"
-          />
-        </div>
-      )}
+
+      {/* --- Voice profile load/create section --- */}
+      <VoiceProfilePanel presetList={presetList} />
+
+
+
 
       {/* XTTS v2: Only show voice reference UI, no tuning sliders */}
       {selectedVoiceData?.model?.toLowerCase().includes("xtts") && (
@@ -874,3 +734,315 @@ function App() {
 }
 
 export default App;
+// ---- Voice Profile Panel ----
+function VoiceProfilePanel({ presetList }) {
+  // Profile editor state
+  const [savedProfiles, setSavedProfiles] = useState({});
+  const [selectedProfileName, setSelectedProfileName] = useState("");
+  const [showProfileEditor, setShowProfileEditor] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [isPinned, setIsPinned] = useState(false);
+  // Bark tuning fields
+  const [seed, setSeed] = useState(424242);
+  const [textTemp, setTextTemp] = useState(0.7);
+  const [topK, setTopK] = useState(50);
+  const [topP, setTopP] = useState(0.9);
+  // Bark voice preset
+  const [voicePreset, setVoicePreset] = useState("");
+  // Save message state
+  const [saveMessage, setSaveMessage] = useState("");
+
+  // Load saved profiles from localStorage on mount, seed ExampleMailNarration if missing
+  useEffect(() => {
+    const stored = JSON.parse(localStorage.getItem("voiceProfiles") || "{}");
+    if (!stored["ExampleMailNarration"]) {
+      stored["ExampleMailNarration"] = {
+        name: "ExampleMailNarration",
+        pinned: true,
+        seed: 424242,
+        text_temp: 0.7,
+        top_k: 50,
+        top_p: 0.9,
+        voice_preset: presetList[0] || ""
+      };
+      localStorage.setItem("voiceProfiles", JSON.stringify(stored));
+    }
+    setSavedProfiles(stored);
+  }, [presetList]);
+
+  // Rehydrate editor fields when selectedProfileName changes
+  useEffect(() => {
+    const val = selectedProfileName;
+    if (val && savedProfiles[val]) {
+      setProfileName(savedProfiles[val].name);
+      setIsPinned(!!savedProfiles[val].pinned);
+      setSeed(savedProfiles[val].seed ?? 424242);
+      setTextTemp(savedProfiles[val].text_temp ?? 0.7);
+      setTopK(savedProfiles[val].top_k ?? 50);
+      setTopP(savedProfiles[val].top_p ?? 0.9);
+      setVoicePreset(savedProfiles[val].voice_preset || "");
+      setShowProfileEditor(true);
+    } else {
+      setShowProfileEditor(false);
+      setProfileName("");
+      setIsPinned(false);
+      setSeed(424242);
+      setTextTemp(0.7);
+      setTopK(50);
+      setTopP(0.9);
+      setVoicePreset("");
+    }
+  }, [selectedProfileName, savedProfiles]);
+
+  // Handler: Create new profile
+  const handleCreateNewProfile = () => {
+    setProfileName("");
+    setIsPinned(false);
+    setSeed(424242);
+    setTextTemp(0.7);
+    setTopK(50);
+    setTopP(0.9);
+    setVoicePreset("");
+    setShowProfileEditor(true);
+    setSelectedProfileName(""); // Deselect
+  };
+
+  // Handler: Save profile
+  const handleSaveProfile = () => {
+    if (!profileName.trim()) {
+      alert("Profile name required.");
+      return;
+    }
+    // Save/update profile in state and localStorage
+    setSavedProfiles((prev) => {
+      const updated = {
+        ...prev,
+        [profileName.trim()]: {
+          name: profileName.trim(),
+          pinned: isPinned,
+          seed,
+          text_temp: textTemp,
+          top_k: topK,
+          top_p: topP,
+          voice_preset: voicePreset,
+        },
+      };
+      localStorage.setItem("voiceProfiles", JSON.stringify(updated));
+      setSaveMessage("Profile saved!");
+      setTimeout(() => setSaveMessage(""), 2000);
+      return updated;
+    });
+    setShowProfileEditor(false);
+    setSelectedProfileName(profileName.trim());
+  };
+
+  // Handler: Delete profile
+  const handleDeleteProfile = () => {
+    if (!profileName.trim()) return;
+    setSavedProfiles((prev) => {
+      const updated = { ...prev };
+      delete updated[profileName.trim()];
+      localStorage.setItem("voiceProfiles", JSON.stringify(updated));
+      return updated;
+    });
+    setShowProfileEditor(false);
+    setSelectedProfileName("");
+    setProfileName("");
+  };
+
+  // Handler: Select profile
+  const handleSelectProfile = (e) => {
+    const val = e.target.value;
+    setSelectedProfileName(val);
+    // If "Example Voice" is selected, ensure fields are hydrated
+    if (val === "Example Voice") {
+      setSelectedProfileName("Example Voice");
+    }
+  };
+
+  // Handler: randomise seed
+  const randomiseSeed = () => {
+    setSeed(Math.floor(Math.random() * 1000000));
+  };
+
+  return (
+    <div className="mb-6">
+      {/* Pinned Profiles panel */}
+      <div className="mb-4">
+        <p className="text-sm font-semibold mb-2">Pinned Profiles</p>
+        <div className="flex flex-wrap gap-2">
+          {Object.values(savedProfiles)
+            .filter((p) => p.pinned)
+            .map((p) => (
+              <button
+                key={p.name}
+                onClick={() => setSelectedProfileName(p.name) || setShowProfileEditor(true)}
+                className="px-3 py-1 text-xs rounded-lg bg-gray-200 hover:bg-gray-300"
+              >
+                {p.name}
+              </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-semibold">Voice Profile</p>
+        <button
+          onClick={handleCreateNewProfile}
+          className="px-2 py-1 text-xs rounded bg-blue-500 text-white hover:bg-blue-600"
+        >
+          + New Profile
+        </button>
+      </div>
+
+      {showProfileEditor && (
+        <div className="mb-4 space-y-2">
+          {/* Save message feedback */}
+          {saveMessage && (
+            <div className="text-green-600 text-sm mb-2">{saveMessage}</div>
+          )}
+          <input
+            type="text"
+            placeholder="Profile Name"
+            value={profileName}
+            onChange={(e) => setProfileName(e.target.value)}
+            className="w-full px-3 py-2 text-sm border rounded"
+          />
+          <label className="flex items-center space-x-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isPinned}
+              onChange={(e) => setIsPinned(e.target.checked)}
+            />
+            <span>Pin profile</span>
+          </label>
+          {/* Bark preset dropdown */}
+          <div>
+            <label className="block text-sm font-medium mb-1">Select Bark Voice</label>
+            <select
+              className="w-full px-3 py-1 border rounded text-sm mb-4"
+              value={voicePreset}
+              onChange={(e) => setVoicePreset(e.target.value)}
+            >
+              <option value="">-- choose preset --</option>
+              {presetList.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </div>
+          {/* Bark tuning fields inserted here */}
+          <h4 className="text-xs font-medium text-gray-600 mt-4">Bark Tuning Settings</h4>
+          {/* Seed input */}
+          <div>
+            <label className="block text-xs font-medium mb-1">Seed – Voice Variation (integer): {seed}</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                max="999999"
+                value={seed}
+                onChange={(e) => setSeed(Number(e.target.value))}
+                className="w-full px-3 py-1 border rounded text-sm"
+              />
+              <button
+                onClick={randomiseSeed}
+                className="px-2 py-1 text-xs bg-gray-200 hover:bg-gray-300 rounded"
+                title="Randomize seed"
+              >
+                🎲
+              </button>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1">
+              Creativity – Temperature (temperature, 0-1 → creative): {textTemp.toFixed(2)}
+              <div className="relative inline-block group ml-1">
+                <span className="text-gray-500 cursor-pointer">?</span>
+                <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
+                  0 = straightforward narration; 1 = highly imaginative and playful
+                </div>
+              </div>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={textTemp}
+              onChange={(e) => setTextTemp(Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1">
+              Variation – Top-K (top_k, 0-100 → larger pool): {topK}
+              <div className="relative inline-block group ml-1">
+                <span className="text-gray-500 cursor-pointer">?</span>
+                <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
+                  How many of the most likely options to consider; low = focused, high = varied
+                </div>
+              </div>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={topK}
+              onChange={(e) => setTopK(Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1">
+              Diversity – Top-P (top_p, 0-1 → nucleus sampling): {topP.toFixed(2)}
+              <div className="relative inline-block group ml-1">
+                <span className="text-gray-500 cursor-pointer">?</span>
+                <div className="absolute bottom-full mb-1 left-1/2 transform -translate-x-1/2 w-48 bg-gray-800 text-white text-xs rounded p-2 hidden group-hover:block z-50">
+                  Include tokens until their cumulative probability reaches this value; low = precise, high = broad
+                </div>
+              </div>
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={topP}
+              onChange={(e) => setTopP(Number(e.target.value))}
+              className="w-full accent-blue-600"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleSaveProfile} className="text-xs px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600">Save</button>
+            <button onClick={handleDeleteProfile} className="text-xs px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600">Delete</button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowProfileEditor(false);
+                setSelectedProfileName("");
+              }}
+              className="text-xs px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!showProfileEditor && (
+        <select
+          onChange={handleSelectProfile}
+          className="w-full px-3 py-2 text-sm border rounded"
+          value={selectedProfileName}
+        >
+          <option value="">-- Load a voice profile --</option>
+          {Object.keys(savedProfiles).map((key) => (
+            <option key={key} value={key}>{key}</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
