@@ -1,16 +1,75 @@
+import json
 import os
+import bark
+
+def process_jobs():
+    while True:
+        job = job_queue.get()
+        try:
+            if job.get("use_bark"):
+                # Synthesize audio using run_bark_synthesis with all Bark parameters
+                audio_array = run_bark_synthesis(
+                    job.get("job_id"),
+                    job.get("text"),
+                    job.get("speaker"),
+                    job.get("voice"),
+                    job.get("preset"),
+                    job.get("text_temp"),
+                    job.get("top_k"),
+                    job.get("top_p"),
+                    job.get("seed"),
+                    job.get("speed"),
+                    job.get("pause_duration"),
+                    job.get("barkSplitSentences"),
+                    job.get("barkMaxDuration"),
+                    job.get("smart_enhance"),
+                    job.get("language"),
+                    job.get("voice_preset"),
+                )
+                # Optionally: Handle audio_array, save, or update job status as needed
+            else:
+                print(f"[WARNING] Unsupported job type or model: {job}")
+        except Exception as e:
+            print(f"[ERROR] Failed to process job: {e}")
+        finally:
+            job_queue.task_done()
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch.nn.utils.weight_norm")
+
+import torch
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    torch.set_default_dtype(torch.float32)
+else:
+    device = torch.device("cpu")
+
+# ────────────── Bark low-level imports for advanced synthesis ──────────────
+from bark.generation import (
+    generate_text_semantic,
+    generate_coarse,
+    generate_fine,
+    codec_decode,
+)
+import numpy as np
+import os
+from scipy.io.wavfile import write as write_wav
+
+SAMPLE_RATE = 24000
 saved_voices = {}
 from pydub import AudioSegment
 import numpy as np
 import logging
-import json
-preset_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "voice_presets.json"))
+
+preset_path = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "voice_presets.json")
+)
 with open(preset_path, "r") as f:
     VOICE_PRESET_MAP = json.load(f)
 print(f"✅ Loaded VOICE_PRESET_MAP from {preset_path}: {list(VOICE_PRESET_MAP.keys())}")
 CHUNKING_WORD_THRESHOLD = 120
 MAX_ATTEMPTS = 3
 from nltk.tokenize import sent_tokenize
+
 
 def chunk_text_by_sentence(text, word_threshold=CHUNKING_WORD_THRESHOLD):
     """
@@ -36,9 +95,17 @@ def chunk_text_by_sentence(text, word_threshold=CHUNKING_WORD_THRESHOLD):
 
     return chunks
 
+
 def crossfade_audio(a, b, duration=0.2, sr=24000):
-    if not isinstance(a, np.ndarray) or not isinstance(b, np.ndarray) or a.size == 0 or b.size == 0:
-        logging.warning("[WARNING] Skipping crossfade: one of the audio chunks is empty or not a valid NumPy array.")
+    if (
+        not isinstance(a, np.ndarray)
+        or not isinstance(b, np.ndarray)
+        or a.size == 0
+        or b.size == 0
+    ):
+        logging.warning(
+            "[WARNING] Skipping crossfade: one of the audio chunks is empty or not a valid NumPy array."
+        )
         return a if isinstance(a, np.ndarray) and a.size > 0 else b
     duration = min(duration, len(a) / sr, len(b) / sr)
     crossfade_samples = int(duration * sr)
@@ -46,7 +113,15 @@ def crossfade_audio(a, b, duration=0.2, sr=24000):
     fade_in = np.linspace(0, 1, crossfade_samples)
     a[-crossfade_samples:] *= fade_out
     b[:crossfade_samples] *= fade_in
-    return np.concatenate([a[:-crossfade_samples], a[-crossfade_samples:] + b[:crossfade_samples], b[crossfade_samples:]])
+    return np.concatenate(
+        [
+            a[:-crossfade_samples],
+            a[-crossfade_samples:] + b[:crossfade_samples],
+            b[crossfade_samples:],
+        ]
+    )
+
+
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import librosa
@@ -62,28 +137,31 @@ from threading import Thread
 from queue import Queue
 from llm_wrapper import enhance_text
 
- # ────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
 # Optional lightweight, fully‑offline LLM for auto punctuation /
 # pause insertion.  The model file (e.g. `ggml‑tiny.en.bin`) can be
 # placed in `backend/llama.cpp/models/` or a custom path supplied
 # via the `LLAMA_MODEL_PATH` env var.
 try:
     from llama_cpp import Llama
+
     LLAMA_MODEL_PATH = os.getenv(
         "LLAMA_MODEL_PATH",
-        os.path.join(os.path.dirname(__file__),
-                     "llama.cpp", "models", "ggml‑tiny.en.bin")
+        os.path.join(
+            os.path.dirname(__file__), "llama.cpp", "models", "ggml‑tiny.en.bin"
+        ),
     )
-    llm = Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048) if os.path.exists(LLAMA_MODEL_PATH) else None
+    llm = (
+        Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048)
+        if os.path.exists(LLAMA_MODEL_PATH)
+        else None
+    )
 except Exception:
     llm = None  # Llama‑cpp not installed or model file missing
 # ────────────────────────────────────────────────────────────────
-try:
-    from bark import generate_audio, SAMPLE_RATE
-    from bark.generation import preload_models
-    from scipy.io.wavfile import write as write_wav
-except ImportError:
-    pass  # Bark support will be conditionally enabled
+from bark.generation import generate_text_semantic, generate_coarse, generate_fine, codec_decode
+from bark.generation import preload_models
+from scipy.io.wavfile import write as write_wav
 
 job_queue = Queue()
 job_status = {}  # job_id: {status, progress, output_path}
@@ -93,10 +171,10 @@ nlp = spacy.load("en_core_web_sm")
 OUTPUT_FOLDER = "output"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
- 
 
 app = Flask(__name__)
 CORS(app)
+
 
 # ------------------------------------------------------------------
 #
@@ -104,21 +182,23 @@ CORS(app)
 # This endpoint enhances or sanitizes text for TTS input.
 @app.route("/preprocess", methods=["POST"])
 def preprocess():
-    data          = request.get_json() or {}
-    raw_text      = data.get("text", "")
-    voice_dir     = data.get("voice_direction", "")
-    enhanced_text = enhance_text_with_llm(raw_text) if voice_dir.strip() else sanitize_text(raw_text)
+    data = request.get_json() or {}
+    raw_text = data.get("text", "")
+    voice_dir = data.get("voice_direction", "")
+    enhanced_text = (
+        enhance_text_with_llm(raw_text)
+        if voice_dir.strip()
+        else sanitize_text(raw_text)
+    )
     return jsonify({"text": enhanced_text})
+
 
 # ------------------------------------------------------------------
 # Human‑readable blurbs to help users pick a voice in the UI
 VOICE_DESCRIPTIONS = {
-    "tts_models/multilingual/multi-dataset/xtts_v2":
-        "✧ XTTS‑v2  ·  Multilingual, cross‑speaker cloning model.  Best when you provide a short WAV of your own voice, but also works with its default timbre.",
-    "tts_models/en/vctk/vits":
-        "✧ VITS / VCTK  ·  Fast English model trained on the VCTK corpus.  Neutral Midlands accent, very CPU‑friendly.",
-    "bark":
-        "✧ Bark  ·  Large generative model with several pre‑baked English narrators (presets 0‑7).  Slowest but most expressive.",
+    "tts_models/multilingual/multi-dataset/xtts_v2": "✧ XTTS‑v2  ·  Multilingual, cross‑speaker cloning model.  Best when you provide a short WAV of your own voice, but also works with its default timbre.",
+    "tts_models/en/vctk/vits": "✧ VITS / VCTK  ·  Fast English model trained on the VCTK corpus.  Neutral Midlands accent, very CPU‑friendly.",
+    "bark": "✧ Bark  ·  Large generative model with several pre‑baked English narrators (presets 0‑7).  Slowest but most expressive.",
 }
 # ------------------------------------------------------------------
 # ------------------------------------------------------------------
@@ -127,6 +207,7 @@ VOICE_DESCRIPTIONS = {
 # actually supports (see inspect.signature below).
 BARK_OPTIONAL_PARAMS = ["text_temp", "waveform_temp", "top_k", "top_p", "seed"]
 # ------------------------------------------------------------------
+
 
 def get_available_voices():
     manager = ModelManager()
@@ -146,28 +227,79 @@ def get_available_voices():
                 if model_key == "tts_models/en/vctk/vits" and not supported_speakers:
                     supported_speakers = [
                         # Common VCTK speaker IDs
-                        "p225","p226","p227","p228","p229","p230","p231","p232",
-                        "p233","p234","p236","p237","p238","p239","p240","p241",
-                        "p243","p244","p245","p246","p247","p248","p249","p250",
-                        "p251","p252","p253","p254","p255","p256","p257","p258",
-                        "p259","p260","p261","p262","p263","p264","p265","p266",
-                        "p267","p268","p269","p270","p271","p272","p273","p274",
-                        "p275","p276","p277","p278","p279","p280"
+                        "p225",
+                        "p226",
+                        "p227",
+                        "p228",
+                        "p229",
+                        "p230",
+                        "p231",
+                        "p232",
+                        "p233",
+                        "p234",
+                        "p236",
+                        "p237",
+                        "p238",
+                        "p239",
+                        "p240",
+                        "p241",
+                        "p243",
+                        "p244",
+                        "p245",
+                        "p246",
+                        "p247",
+                        "p248",
+                        "p249",
+                        "p250",
+                        "p251",
+                        "p252",
+                        "p253",
+                        "p254",
+                        "p255",
+                        "p256",
+                        "p257",
+                        "p258",
+                        "p259",
+                        "p260",
+                        "p261",
+                        "p262",
+                        "p263",
+                        "p264",
+                        "p265",
+                        "p266",
+                        "p267",
+                        "p268",
+                        "p269",
+                        "p270",
+                        "p271",
+                        "p272",
+                        "p273",
+                        "p274",
+                        "p275",
+                        "p276",
+                        "p277",
+                        "p278",
+                        "p279",
+                        "p280",
                     ]
                 # ------------------------------------------------------------------
 
                 requires_language = len(supported_languages) > 1
-                requires_speaker_wav = any(key in model_key for key in ["xtts", "your_tts"])
+                requires_speaker_wav = any(
+                    key in model_key for key in ["xtts", "your_tts"]
+                )
 
-                available_voices.append({
-                    "name": model_key,
-                    "model": model_name,
-                    "requires_language": requires_language,
-                    "requires_speaker_wav": requires_speaker_wav,
-                    "supported_languages": supported_languages,
-                    "supported_speakers": supported_speakers,
-                    "description": VOICE_DESCRIPTIONS.get(model_key, "")
-                })
+                available_voices.append(
+                    {
+                        "name": model_key,
+                        "model": model_name,
+                        "requires_language": requires_language,
+                        "requires_speaker_wav": requires_speaker_wav,
+                        "supported_languages": supported_languages,
+                        "supported_speakers": supported_speakers,
+                        "description": VOICE_DESCRIPTIONS.get(model_key, ""),
+                    }
+                )
 
     # Include Bark voices manually, presets generated from VOICE_PRESET_MAP keys
     bark_voices = [
@@ -182,19 +314,80 @@ def get_available_voices():
             "presets": list(VOICE_PRESET_MAP.keys()),
             "description": VOICE_DESCRIPTIONS["bark"],
             "tokens": [
-                "[laughter]", "[laughs]", "[sighs]", "[music]", "[gasps]", "[clears throat]",
-                "[whispers]", "[giggles]", "[snickers]", "[coughs]", "[groans]", "[yells]",
-                "[gasps]", "[whimpers]", "[sobs]", "[murmurs]", "[chuckles]", "[hums]",
-                "[sneezes]", "[grunts]", "[shrieks]", "[hiccups]", "[stammers]", "[stutters]",
-                "[grumbles]", "[snorts]", "[howls]", "[moans]", "[guffaws]", "[sighs deeply]",
-                "[laughs nervously]", "[cries]", "[sniffs]", "[smacks lips]", "[claps]",
-                "[yawns]", "[mumbles]", "[shushes]", "[exhales sharply]", "[snaps]",
-                "[whistles]", "[crunches]", "[slurps]", "[clicks]", "[clinks]", "[clatters]",
-                "[sizzles]", "[rustles]", "[splashes]", "[taps]", "[thumps]", "[rumbles]",
-                "[drums]", "[jingles]", "[jangles]", "[pops]", "[bangs]", "[hisses]",
-                "[scratches]", "[squeaks]", "[screeches]", "[buzzes]", "[swooshes]",
-                "[swoops]", "[clangs]", "[whirrs]", "[chirps]", "[beeps]", "[tick-tocks]",
-                "[thuds]", "[swishes]", "[crackles]", "[fizzes]", "[humming]"
+                "[laughter]",
+                "[laughs]",
+                "[sighs]",
+                "[music]",
+                "[gasps]",
+                "[clears throat]",
+                "[whispers]",
+                "[giggles]",
+                "[snickers]",
+                "[coughs]",
+                "[groans]",
+                "[yells]",
+                "[gasps]",
+                "[whimpers]",
+                "[sobs]",
+                "[murmurs]",
+                "[chuckles]",
+                "[hums]",
+                "[sneezes]",
+                "[grunts]",
+                "[shrieks]",
+                "[hiccups]",
+                "[stammers]",
+                "[stutters]",
+                "[grumbles]",
+                "[snorts]",
+                "[howls]",
+                "[moans]",
+                "[guffaws]",
+                "[sighs deeply]",
+                "[laughs nervously]",
+                "[cries]",
+                "[sniffs]",
+                "[smacks lips]",
+                "[claps]",
+                "[yawns]",
+                "[mumbles]",
+                "[shushes]",
+                "[exhales sharply]",
+                "[snaps]",
+                "[whistles]",
+                "[crunches]",
+                "[slurps]",
+                "[clicks]",
+                "[clinks]",
+                "[clatters]",
+                "[sizzles]",
+                "[rustles]",
+                "[splashes]",
+                "[taps]",
+                "[thumps]",
+                "[rumbles]",
+                "[drums]",
+                "[jingles]",
+                "[jangles]",
+                "[pops]",
+                "[bangs]",
+                "[hisses]",
+                "[scratches]",
+                "[squeaks]",
+                "[screeches]",
+                "[buzzes]",
+                "[swooshes]",
+                "[swoops]",
+                "[clangs]",
+                "[whirrs]",
+                "[chirps]",
+                "[beeps]",
+                "[tick-tocks]",
+                "[thuds]",
+                "[swishes]",
+                "[crackles]",
+                "[fizzes]",
+                "[humming]",
             ],
         }
     ]
@@ -205,8 +398,8 @@ def get_available_voices():
     # for audiobook drafting.  Only these will be exposed to the front‑end.
     PREFERRED_MODELS = {
         "tts_models/multilingual/multi-dataset/xtts_v2",  # cloning / multilingual
-        "tts_models/en/vctk/vits",                       # neutral, clear English
-        "bark",                                          # high‑quality, slow CPU synthesis
+        "tts_models/en/vctk/vits",  # neutral, clear English
+        "bark",  # high‑quality, slow CPU synthesis
     }
 
     available_voices = [v for v in available_voices if v["name"] in PREFERRED_MODELS]
@@ -219,10 +412,12 @@ def get_available_voices():
 
     return available_voices
 
+
 AVAILABLE_VOICES = get_available_voices()
 print(f"✅ Loaded {len(AVAILABLE_VOICES)} voice models.")
 
 DEFAULT_MODEL = "tts_models/multilingual/multi-dataset/xtts_v2"
+
 
 def get_tts_instance(model_name):
     """
@@ -238,7 +433,8 @@ def get_tts_instance(model_name):
         logging.exception(f"❌ Error loading TTS model {model_name}: {e}")
         return None
 
- # ------------------------------------------------------------------
+
+# ------------------------------------------------------------------
 # Use the offline Llama model to insert punctuation & SSML breaks.
 def enhance_text_with_llm(raw_text: str) -> str:
     """
@@ -252,7 +448,7 @@ def enhance_text_with_llm(raw_text: str) -> str:
 
     prompt = (
         "You are a helpful assistant that fixes punctuation in a paragraph "
-        "and inserts the tag <break time=\"0.6s\"/> wherever the narrator "
+        'and inserts the tag <break time="0.6s"/> wherever the narrator '
         "should pause for breath.  Return ONLY the corrected text.\n\n"
         f"### INPUT:\n{raw_text.strip()}\n\n### OUTPUT:\n"
     )
@@ -263,32 +459,45 @@ def enhance_text_with_llm(raw_text: str) -> str:
     except Exception as e:
         logging.exception("LLM text enhancement failed")
         return raw_text.strip()
+
+
 # ------------------------------------------------------------------
+
 
 def sanitize_text(text):
     text = unicodedata.normalize("NFKC", text)
-    text = ''.join(c for c in text if c.isprintable())
-    replacements = {"“": '"', "”": '"', "‘": "'", "’": "'", "–": "-", "—": "-", "…": "..."}
+    text = "".join(c for c in text if c.isprintable())
+    replacements = {
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "–": "-",
+        "—": "-",
+        "…": "...",
+    }
     # Drop combining marks (category "Mn") such as the '͡' tie‑bar
-    text = ''.join(ch for ch in text if unicodedata.category(ch) != "Mn")
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Mn")
     for bad, good in replacements.items():
         text = text.replace(bad, good)
     # Fix abrupt period followed by capital letter with space
-    text = re.sub(r'\.\s+([A-Z])', r'. \1', text)
+    text = re.sub(r"\.\s+([A-Z])", r". \1", text)
     # Retain Bark tokens: [laughter], [music], etc., but preserve all user tokens matching Bark's allowed tokens (case-sensitive and as written).
     # Use tokens from AVAILABLE_VOICES for Bark
     bark_voice = next((v for v in AVAILABLE_VOICES if v.get("name") == "bark"), None)
     allowed_tokens = set()
     if bark_voice and "tokens" in bark_voice:
         allowed_tokens = set(bark_voice["tokens"])
+
     # Remove [bracketed] tokens EXCEPT those in allowed_tokens (case-sensitive, preserve case)
     def token_replacer(m):
         token = m.group(0)
         return token if token in allowed_tokens else ""
+
     # Only replace bracketed tokens that do not match the allowed list exactly
-    text = re.sub(r'\[[^\[\]]+\]', token_replacer, text)
+    text = re.sub(r"\[[^\[\]]+\]", token_replacer, text)
     # Remove extra whitespace
-    return re.sub(r'\s+', ' ', text).strip()
+    return re.sub(r"\s+", " ", text).strip()
 
 
 # ------------------------------------------------------------------
@@ -311,6 +520,7 @@ def load_history_prompt_npz(file_path):
         logging.exception(f"Failed to load history prompt from {file_path}: {e}")
         return None
 
+
 def concatenate_audio_files(audio_files, output_path, pause_duration=0.5):
     """
     Concatenates multiple audio files with silence pauses in between.
@@ -327,6 +537,11 @@ def concatenate_audio_files(audio_files, output_path, pause_duration=0.5):
     if combined_audio:
         merged_audio = np.concatenate(combined_audio)
         sf.write(output_path, merged_audio, sr)
+        # ✅ Update job status in status_store
+        status_store[job_id]["audio_url"] = f"/output/{job_id}.wav"
+        status_store[job_id]["status"] = "done"
+        status_store[job_id]["progress"] = 100
+
 
 #
 # Main TTS generation endpoint.
@@ -341,38 +556,81 @@ def generate():
         else:
             data = request.form.to_dict() or {}
         # ------------------------------------------------------------------
+        # Normalize Bark tuning keys for backend compatibility
+        if "temperature" in data:
+            data["text_temp"] = data["temperature"]
+        if "preset" not in data and "voice_preset" in data:
+            data["preset"] = data["voice_preset"]
+        if "focus" not in data and "top_p" in data:
+            data["focus"] = data["top_p"]
+        if "pool" not in data and "top_k" in data:
+            data["pool"] = data["top_k"]
+        # ------------------------------------------------------------------
         # (Voice saving logic moved to dedicated endpoint)
         # ------------------------------------------------------------------
         # Core fields sent by the new UI
-        text             = (data.get("text") or "").strip()
-        model_name       = (data.get("model") or "").strip()      # e.g. "xtts", "bark"
-        voice_name       = model_name if model_name != "xtts" else "tts_models/multilingual/multi-dataset/xtts_v2"
-        language         = (data.get("language") or "").strip()
-        speaker          = (data.get("speaker") or "").strip()    # VITS speaker id
-        voice_preset     = (data.get("preset")  or "").strip()    # Bark preset id
-        voice_id         = (data.get("voice")   or "").strip()    # Bark custom speaker
-        direction        = (data.get("voice_direction") or "").strip()
+        text = (data.get("text") or "").strip()
+        model_name = (data.get("model") or "").strip()  # e.g. "xtts", "bark"
+        # --- DEBUG LOGGING ---
+        print("[DEBUG] /generate hit with model:", model_name)
+        # ---------------------
+        voice_name = (
+            model_name
+            if model_name != "xtts"
+            else "tts_models/multilingual/multi-dataset/xtts_v2"
+        )
+        language = (data.get("language") or "").strip()
+        speaker = (data.get("speaker") or "").strip()  # VITS speaker id
+        voice_preset = (data.get("preset") or "").strip()  # Bark preset id
+        voice_id = (data.get("voice") or "").strip()  # Bark custom speaker
+        direction = (data.get("voice_direction") or "").strip()
 
         # Bark fine‑tune sliders
-        creativity = data.get("creativity")   # --> text_temp  (float 0‑1)
-        pool       = data.get("pool")         # --> top_k      (int)
-        focus      = data.get("focus")        # --> top_p      (float 0‑1)
+        creativity = data.get("creativity")  # --> text_temp  (float 0‑1)
+        pool = data.get("pool")  # --> top_k      (int)
+        focus = data.get("focus")  # --> top_p      (float 0‑1)
 
-        # Queue‑engine misc
-        speed           = float(data.get("speed", 1.0))
-        chunk_size      = int(data.get("chunk_size", 300))
-        pause_duration  = float(data.get("pause_duration", 0.5))
+        # Queue‑engine misc
+        speed = float(data.get("speed", 1.0))
+        chunk_size = int(data.get("chunk_size", 300))
+        pause_duration = float(data.get("pause_duration", 0.5))
 
         # XTTS config fields
-        length_scale    = float(data.get("length_scale", 1.0))
-        noise_scale     = float(data.get("noise_scale", 0.667))
-        noise_scale_w   = float(data.get("noise_scale_w", 0.8))
+        length_scale = float(data.get("length_scale", 1.0))
+        noise_scale = float(data.get("noise_scale", 0.667))
+        noise_scale_w = float(data.get("noise_scale_w", 0.8))
 
         # Turn on the punctuation/SSML enhancer iff the user supplied any direction text
         smart_enhance = bool(direction)
         # ------------------------------------------------------------------
 
-        voice_info = next((v for v in AVAILABLE_VOICES if v["name"] == voice_name), None)
+        # --- Bark-specific chunking options ---
+        # Accept both JSON and form-data, so get from both places
+        # Try to parse as bool and float, fallback to defaults if not present
+        bark_split_sentences = False
+        bark_max_duration = 14
+        # Try to get from JSON (if present)
+        if request.is_json:
+            bark_split_sentences = bool(request.json.get("barkSplitSentences", False))
+            bark_max_duration = float(request.json.get("barkMaxDuration", 14))
+        else:
+            # For form-data, values are strings
+            bark_split_sentences = (
+                str(data.get("barkSplitSentences", "False")).lower() == "true"
+            )
+            try:
+                bark_max_duration = float(data.get("barkMaxDuration", 14))
+            except Exception:
+                bark_max_duration = 14
+        # ------------------------------------------------------------------
+        # Debug print for Bark chunking options
+        print(
+            f"[DEBUG] barkSplitSentences: {bark_split_sentences}, barkMaxDuration: {bark_max_duration}"
+        )
+
+        voice_info = next(
+            (v for v in AVAILABLE_VOICES if v["name"] == voice_name), None
+        )
         # --- New logic for language, speaker, and speaker_wav handling ---
         if voice_info:
             if voice_info.get("requires_language") and not language:
@@ -380,7 +638,12 @@ def generate():
                 if "multilingual" in voice_name:
                     language = "en"
                 else:
-                    return jsonify({"error": f"Language is required for model {voice_name}."}), 400
+                    return (
+                        jsonify(
+                            {"error": f"Language is required for model {voice_name}."}
+                        ),
+                        400,
+                    )
             elif not voice_info.get("requires_language"):
                 language = None
 
@@ -390,14 +653,113 @@ def generate():
         speaker_wav = request.files.get("speaker_wav")
         if voice_info and voice_info.get("requires_speaker_wav"):
             if not speaker_wav or not speaker_wav.filename:
-                return jsonify({"error": f"Model {voice_name} requires a speaker reference audio file (WAV)."}), 400
+                return (
+                    jsonify(
+                        {
+                            "error": f"Model {voice_name} requires a speaker reference audio file (WAV)."
+                        }
+                    ),
+                    400,
+                )
         # ---------------------------------------------------------------
 
         if "bark" in voice_name:
-            job_id = str(uuid4())
-            job_status[job_id] = {"status": "queued", "progress": 0, "output_path": None}
+            print("[DEBUG] Starting Bark synthesis")
+            import traceback
 
-            job_queue.put({
+            try:
+                # Ensure job_id is assigned before accessing it
+                job_id = None
+                if request.is_json and request.json is not None:
+                    job_id = request.json.get("job_id")
+                if not job_id:
+                    job_id = str(uuid4())
+                print(f"[DEBUG] status_store snapshot: {job_status.get(job_id, {})}")
+                print(f"[DEBUG] full request body: {request.json}")
+                job_status[job_id] = {
+                    "status": "queued",
+                    "progress": 0,
+                    "output_path": None,
+                }
+
+                # Ensure advanced Bark parameters are included in the job dict
+                job = {
+                    "job_id": job_id,
+                    "text": text,
+                    "voice_name": voice_name,
+                    "speed": speed,
+                    "pause_duration": pause_duration,
+                    "language": language,
+                    "speaker": speaker,
+                    "speaker_wav": speaker_wav.read() if speaker_wav else None,
+                    "speaker_wav_name": (speaker_wav.filename if speaker_wav else None),
+                    "use_bark": True,
+                    # Updated/inserted Bark job keys:
+                    "voice_preset": voice_preset or voice_id,
+                    # sliders mapped to Bark arg names
+                    "text_temp": creativity if creativity is not None else "",
+                    "top_k": pool if pool is not None else "",
+                    "top_p": focus if focus is not None else "",
+                    # (Retain other Bark options if needed)
+                    "smart_enhance": smart_enhance,
+                    # Add XTTS config fields for consistency (not used by Bark)
+                    "length_scale": length_scale,
+                    "noise_scale": noise_scale,
+                    "noise_scale_w": noise_scale_w,
+                    # Pass through Bark seed for voice consistency
+                    "seed": data.get("seed"),
+                    # Pass new Bark chunking options
+                    "bark_split_sentences": bark_split_sentences,
+                    "bark_max_duration": bark_max_duration,
+                    # Add all Bark fields for synthesize_audio_with_bark compatibility
+                    "voice": voice_id or voice_name,
+                    "preset": voice_preset,
+                    "barkSplitSentences": bark_split_sentences,
+                    "barkMaxDuration": bark_max_duration,
+                }
+                # Add advanced Bark parameters if present in data
+                for adv_param in ["top_k", "top_p", "seed"]:
+                    if adv_param in data:
+                        job[adv_param] = data.get(adv_param)
+
+                job_queue.put(job)
+
+                queue_position = job_queue.qsize()
+                estimated_wait_time = queue_position * 5
+                print("[DEBUG] Completed all synthesis steps")
+                print(f"[DEBUG] Finished Bark synthesis for job_id: {job_id}")
+                return jsonify(
+                    {
+                        "job_id": job_id,
+                        "queue_position": queue_position,
+                        "estimated_wait_time": estimated_wait_time,
+                    }
+                )
+            except Exception as e:
+                print(f"[ERROR] Bark synthesis failed: {e}")
+                traceback.print_exc()
+
+        if not text:
+            return jsonify({"error": "Text input is required."}), 400
+        if not voice_info:
+            return jsonify({"error": f"Voice model '{voice_name}' not found."}), 400
+        if (
+            speaker
+            and voice_info["supported_speakers"]
+            and speaker not in voice_info["supported_speakers"]
+        ):
+            return (
+                jsonify(
+                    {"error": f"Invalid speaker '{speaker}' for model {voice_name}."}
+                ),
+                400,
+            )
+
+        job_id = str(uuid4())
+        job_status[job_id] = {"status": "queued", "progress": 0, "output_path": None}
+
+        job_queue.put(
+            {
                 "job_id": job_id,
                 "text": text,
                 "voice_name": voice_name,
@@ -407,68 +769,27 @@ def generate():
                 "speaker": speaker,
                 "speaker_wav": speaker_wav.read() if speaker_wav else None,
                 "speaker_wav_name": speaker_wav.filename if speaker_wav else None,
-                "use_bark": True,
-                # Updated/inserted Bark job keys:
-                "voice_preset": voice_preset or voice_id,
-                # sliders mapped to Bark arg names
-                "text_temp":   creativity if creativity is not None else "",
-                "top_k":       pool       if pool       is not None else "",
-                "top_p":       focus      if focus      is not None else "",
-                # (Retain other Bark options if needed)
+                "voice_preset": voice_preset,
                 "smart_enhance": smart_enhance,
-                # Add XTTS config fields for consistency (not used by Bark)
                 "length_scale": length_scale,
                 "noise_scale": noise_scale,
                 "noise_scale_w": noise_scale_w,
-                # Pass through Bark seed for voice consistency
-                "seed": data.get("seed"),
-            })
-
-            queue_position = job_queue.qsize()
-            estimated_wait_time = queue_position * 5
-            return jsonify({
-                "job_id": job_id,
-                "queue_position": queue_position,
-                "estimated_wait_time": estimated_wait_time
-            })
-
-        if not text:
-            return jsonify({"error": "Text input is required."}), 400
-        if not voice_info:
-            return jsonify({"error": f"Voice model '{voice_name}' not found."}), 400
-        if speaker and voice_info["supported_speakers"] and speaker not in voice_info["supported_speakers"]:
-            return jsonify({"error": f"Invalid speaker '{speaker}' for model {voice_name}."}), 400
-
-        job_id = str(uuid4())
-        job_status[job_id] = {"status": "queued", "progress": 0, "output_path": None}
-
-        job_queue.put({
-            "job_id": job_id,
-            "text": text,
-            "voice_name": voice_name,
-            "speed": speed,
-            "pause_duration": pause_duration,
-            "language": language,
-            "speaker": speaker,
-            "speaker_wav": speaker_wav.read() if speaker_wav else None,
-            "speaker_wav_name": speaker_wav.filename if speaker_wav else None,
-            "voice_preset": voice_preset,
-            "smart_enhance": smart_enhance,
-            "length_scale": length_scale,
-            "noise_scale": noise_scale,
-            "noise_scale_w": noise_scale_w,
-        })
+            }
+        )
 
         queue_position = job_queue.qsize()
         estimated_wait_time = queue_position * 5  # rough estimate: 5 seconds per job
-        return jsonify({
-            "job_id": job_id,
-            "queue_position": queue_position,
-            "estimated_wait_time": estimated_wait_time
-        })
+        return jsonify(
+            {
+                "job_id": job_id,
+                "queue_position": queue_position,
+                "estimated_wait_time": estimated_wait_time,
+            }
+        )
     except Exception as e:
         logging.exception("Error in generate endpoint")
         return jsonify({"error": f"Internal error: {e}"}), 500
+
 
 #
 # Job status endpoint.
@@ -491,22 +812,34 @@ def check_status(job_id):
         status_info["queue_position"] = queue_position
     if status_info["status"] == "done":
         status_info["audio_url"] = f"/audio/{job_id}"
-        return jsonify({
+        return jsonify(
+            {
+                "status": status_info.get("status"),
+                "progress": status_info.get("progress", 0),
+                "chunk_index": status_info.get("chunk_index"),
+                "total_chunks": status_info.get("total_chunks"),
+                "audio_url": status_info.get("audio_url"),
+                "queue_position": status_info.get("queue_position"),
+            }
+        )
+    return jsonify(
+        {
             "status": status_info.get("status"),
             "progress": status_info.get("progress", 0),
             "chunk_index": status_info.get("chunk_index"),
             "total_chunks": status_info.get("total_chunks"),
             "audio_url": status_info.get("audio_url"),
-            "queue_position": status_info.get("queue_position")
-        })
-    return jsonify({
-        "status": status_info.get("status"),
-        "progress": status_info.get("progress", 0),
-        "chunk_index": status_info.get("chunk_index"),
-        "total_chunks": status_info.get("total_chunks"),
-        "audio_url": status_info.get("audio_url"),
-        "queue_position": status_info.get("queue_position")
-    })
+            "queue_position": status_info.get("queue_position"),
+        }
+    )
+
+
+# ------------------------------------------------------------------
+# List available voices endpoint.
+@app.route("/voices", methods=["GET"])
+def list_voices():
+    return jsonify({"voices": AVAILABLE_VOICES})
+
 
 #
 # Cancel a queued job by job_id.
@@ -524,15 +857,21 @@ def cancel_job(job_id):
             return jsonify({"status": "cancelled"})
     return jsonify({"error": "Job not found or already processing."}), 404
 
-def synthesize_audio_with_vits(text, speaker_id=None, noise_scale=0.667, duration_scale=1.0, use_phonemes=False):
+
+def synthesize_audio_with_vits(
+    text, speaker_id=None, noise_scale=0.667, duration_scale=1.0, use_phonemes=False
+):
     """
     Stub for VITS synthesis with support for additional parameters.
     Currently logs the parameters and returns None.
     """
-    logging.info(f"[VITS] synthesize_audio_with_vits called with: text='{text[:30]}...', speaker_id={speaker_id}, noise_scale={noise_scale}, duration_scale={duration_scale}, use_phonemes={use_phonemes}")
+    logging.info(
+        f"[VITS] synthesize_audio_with_vits called with: text='{text[:30]}...', speaker_id={speaker_id}, noise_scale={noise_scale}, duration_scale={duration_scale}, use_phonemes={use_phonemes}"
+    )
     # TODO: Actual VITS synthesis implementation goes here
     # For now, just return None or raise NotImplementedError
     return None
+
 
 def safe_float(value, default):
     try:
@@ -540,332 +879,325 @@ def safe_float(value, default):
     except (ValueError, TypeError):
         return default
 
-def synthesize_audio_with_bark(job, job_id, raw_input_text, output_path):
+
+import re
+
+# --- New semantic chunking function ---
+def create_semantic_chunks(text, max_chars):
+    """
+    Splits the input text into chunks based on punctuation and conjunctions,
+    trying to keep chunks below max_chars.
+    """
+    # Define break points for semantic chunking
+    breakpoints = re.split(r'(?<=[\.\?!])\s+|(?<=,)\s+|(?<= and )', text)
+    chunks = []
+    current_chunk = ""
+
+    for part in breakpoints:
+        if len(current_chunk) + len(part) <= max_chars:
+            current_chunk += part
+        else:
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+            current_chunk = part
+
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+
+    return chunks
+
+
+preload_models()
+
+def run_bark_synthesis(
+    job_id,
+    text,
+    speaker,
+    voice,
+    preset,
+    text_temp,
+    top_k,
+    top_p,
+    seed,
+    speed,
+    pause_duration,
+    barkSplitSentences,
+    barkMaxDuration,
+    smart_enhance,
+    language,
+    voice_preset,
+    **kwargs
+):
     """
     Handles Bark TTS synthesis with chunking and voice prompt preservation.
     Uses semantic token generation and waveform synthesis for improved reliability.
     Applies crossfading to improve audio transitions between chunks.
     Reports chunk progress for frontend progress bar.
-    Refactored to ensure consistent voice by reusing history_prompt.
+    Accepts split_sentences and max_duration to control chunking logic.
     """
-    # 📘 Table: Bark Consistency Attempts
-    # Attempt #11b - Strategy B1 Local Prompt Loader
-    # Description: Locally loads `.npz` preset as embedding dict instead of importing from Bark
-    try:
-        import inspect
-        from bark import SAMPLE_RATE, preload_models, generate_audio
-        from scipy.io.wavfile import write as write_wav
-        # Set Bark generation parameters using global API
-        from bark import generation
-        logger = logging.getLogger("bark")
-        preload_models()
-        processed_text = sanitize_text(raw_input_text)
+    import numpy as np
+    import os
+    import logging
+    from scipy.io.wavfile import write as write_wav
+    logger = logging.getLogger("bark")
 
-        # Insert debug logging for Bark input
-        print(f"[DEBUG] Bark input (raw) length {len(raw_input_text)} characters: {raw_input_text}")
-        print(f"[DEBUG] Bark input (sanitized) length {len(processed_text)} characters: {processed_text}")
-
-        # Check for missing punctuation at end
-        if not processed_text.strip().endswith(".") and not processed_text.strip().endswith("!") and not processed_text.strip().endswith("?"):
-            print("[WARNING] Input text does not end with punctuation, may cause incomplete generation.")
-
-        # Semantic chunking using chunk_text_by_sentence for sentence-aware splitting
-        semantic_chunks = chunk_text_by_sentence(processed_text)
-        total_chunks = len(semantic_chunks)
+    raw_input_text = text
+    processed_text = sanitize_text(raw_input_text) if raw_input_text is not None else sanitize_text(text)
+    final_output_path = f"output/{job_id}_final.wav" if job_id else "output/final.wav"
+    print(f"[DEBUG] Bark input (raw) length {len(text)} characters: {text}")
+    print(f"[DEBUG] Bark input (sanitized) length {len(processed_text)} characters: {processed_text}")
+    if (
+        not processed_text.strip().endswith(".")
+        and not processed_text.strip().endswith("!")
+        and not processed_text.strip().endswith("?")
+    ):
+        print("[WARNING] Input text does not end with punctuation, may cause incomplete generation.")
+    # --- Bark chunking logic ---
+    print("[DEBUG] Creating semantic chunks")
+    job = locals()
+    barkSplitSentences = job.get("barkSplitSentences", True)
+    barkMaxDuration = job.get("barkMaxDuration", barkMaxDuration)
+    sanitized_text = processed_text
+    semantic_chunks = []
+    words_per_second = 2.5
+    char_threshold = 300
+    if barkSplitSentences:
+        print("[DEBUG] Performing chunking before synthesis")
+        import re
+        sentence_delimiters = re.compile(r'(?<=[\.\!\?])\s+')
+        sentence_candidates = sentence_delimiters.split(sanitized_text)
+        temp_chunk = ""
+        for sentence in sentence_candidates:
+            candidate_chunk = (temp_chunk + " " + sentence).strip() if temp_chunk else sentence.strip()
+            est_duration = len(candidate_chunk.split()) / words_per_second
+            logger.debug(f"[DEBUG] Estimated duration for chunk: {est_duration:.2f}s")
+            if len(candidate_chunk) > char_threshold or est_duration > barkMaxDuration:
+                if temp_chunk.strip():
+                    semantic_chunks.append(temp_chunk.strip())
+                temp_chunk = sentence.strip()
+            else:
+                if temp_chunk:
+                    temp_chunk = (temp_chunk + " " + sentence).strip()
+                else:
+                    temp_chunk = sentence.strip()
+        if temp_chunk.strip():
+            semantic_chunks.append(temp_chunk.strip())
+        final_chunks = []
+        for chunk in semantic_chunks:
+            est_duration = len(chunk.split()) / words_per_second
+            if len(chunk) > char_threshold or est_duration > barkMaxDuration:
+                subchunks = re.split(r'(?<=,)\s+|(?<= and )', chunk)
+                temp_sub = ""
+                for sub in subchunks:
+                    candidate_sub = (temp_sub + " " + sub).strip() if temp_sub else sub.strip()
+                    est_sub_duration = len(candidate_sub.split()) / words_per_second
+                    logger.debug(f"[DEBUG] Estimated duration for subchunk: {est_sub_duration:.2f}s")
+                    if len(candidate_sub) > char_threshold or est_sub_duration > barkMaxDuration:
+                        if temp_sub.strip():
+                            final_chunks.append(temp_sub.strip())
+                        temp_sub = sub.strip()
+                    else:
+                        if temp_sub:
+                            temp_sub = (temp_sub + " " + sub).strip()
+                        else:
+                            temp_sub = sub.strip()
+                if temp_sub.strip():
+                    final_chunks.append(temp_sub.strip())
+            else:
+                final_chunks.append(chunk)
+        semantic_chunks = [c for c in final_chunks if c.strip()]
+        print(f"[DEBUG] Generated {len(semantic_chunks)} semantic chunks")
+    else:
+        semantic_chunks = [sanitized_text]
+    for idx, chunk in enumerate(semantic_chunks):
+        estimated_duration = len(chunk.split()) / 2.5
+        print(f"[DEBUG] Chunk {idx} estimated duration: {estimated_duration:.2f}s")
+    if len(semantic_chunks) == 1:
+        estimated_duration = len(semantic_chunks[0].split()) / 2.5
+        if estimated_duration > barkMaxDuration:
+            print("[WARN] Only 1 chunk created and it's too long. Rechunking based on max duration.")
+            words = semantic_chunks[0].split()
+            chunk_word_limit = int(barkMaxDuration * 2.5)
+            semantic_chunks = [' '.join(words[i:i + chunk_word_limit]) for i in range(0, len(words), chunk_word_limit)]
+            print(f"[DEBUG] Rechunked to {len(semantic_chunks)} fallback chunks due to duration constraint.")
+    if semantic_chunks:
+        print(f"[DEBUG] First chunk preview: {semantic_chunks[0][:200]}")
+    else:
+        print("[DEBUG] No semantic chunks generated.")
+    print(f"[DEBUG] semantic_chunks created: {len(semantic_chunks)} chunks")
+    for i, chunk in enumerate(semantic_chunks):
+        print(f"[DEBUG] semantic_chunks[{i}]: {repr(chunk)}")
+        est_duration = len(chunk.split()) / words_per_second
+        logger.debug(f"[DEBUG] Estimated duration for chunk: {est_duration:.2f}s")
+    if not semantic_chunks:
+        print("[ERROR] No semantic chunks generated. Exiting early.")
+        return ""
+    if len(semantic_chunks) == 1 and len(text) > 300:
+        logger.warning("[WARN] Only 1 chunk created despite long input. Chunking might not be working as expected.")
+    total_chunks = len(semantic_chunks)
+    if job_id is not None and job_status.get(job_id) is not None:
         job_status[job_id]["total_chunks"] = total_chunks
 
-        # New logic: load Bark preset path from mapping, using installed Bark package location
-        voice_name = job.get("voice_preset", "Default (Speaker 0)")
-        filename = VOICE_PRESET_MAP.get(voice_name, VOICE_PRESET_MAP["Default (Speaker 0)"])
-        import bark
-        bark_root = os.path.dirname(bark.__file__)
-        voice_preset_path = os.path.join(bark_root, "assets", "prompts", filename)
-        # Insert file existence check and debug logging before np.load
-        if not os.path.isfile(voice_preset_path):
-            raise FileNotFoundError(f"Voice preset file not found: {voice_preset_path}")
-        logging.debug(f"Attempting to load voice preset file: {voice_preset_path}")
-
-        history_prompt_data = load_history_prompt_npz(voice_preset_path)
-
-        # Extract Bark generation parameters from job
-        seed = job.get("seed")
-        text_temp = safe_float(job.get("text_temp"), 0.7)
-        top_k = int(job.get("top_k") or 50)
-        top_p = safe_float(job.get("top_p"), 0.95)
-
-        # Set Bark generation parameters globally before the loop
-        import torch
-        torch.manual_seed(seed or 42)
-        generation.TEXT_TEMP = text_temp
-        generation.TOP_K = top_k
-        generation.TOP_P = top_p
-
-        # Bark generation loop with consistent voice
-        audio_array = []
-        for i, semantic_chunk in enumerate(semantic_chunks):
-            print(f"[DEBUG] Generating chunk {i+1}/{len(semantic_chunks)}")
-            job_status[job_id]["chunk_index"] = i + 1
-            job_status[job_id]["progress"] = min(int(((i + 1) / total_chunks) * 100), 99)
-            try:
-                audio = generate_audio(
-                    semantic_chunk,
-                    history_prompt=voice_preset_path  # consistently use the original preset
-                )
-                # Apply crossfade if not the first chunk
-                if audio_array:
-                    audio = crossfade_audio(audio_array[-1], audio)
-                    audio_array[-1] = audio  # Replace last with crossfaded
+    # --- Begin retry logic for semantic chunks ---
+    # For each chunk, if generation fails (empty or gibberish), retry once
+    audio_arrays = []
+    chunk_attempts = []
+    # Prepare Bark parameters for the pipeline
+    bark_history_prompt = None
+    if voice_preset:
+        # Map voice_preset from VOICE_PRESET_MAP to actual identifier or .npz path
+        mapped_value = VOICE_PRESET_MAP.get(voice_preset)
+        if mapped_value:
+            # Use Bark's installed path for prompt location if mapped_value is a filename (not full path)
+            if mapped_value.endswith(".npz"):
+                # Try to resolve absolute path if not already absolute
+                if not os.path.isabs(mapped_value):
+                    bark_root = os.path.dirname(bark.__file__)
+                    speaker_path = os.path.join(bark_root, "assets", "prompts", mapped_value)
                 else:
-                    audio_array.append(audio)
-            except Exception as e:
-                logger.warning(f"[WARNING] Bark chunk {i+1} failed: {e}")
-                continue
-
-        if audio_array and any(isinstance(a, np.ndarray) and a.size > 0 for a in audio_array):
-            final_audio = np.concatenate(audio_array, axis=-1)
-            # Save as 16-bit PCM WAV
-            pcm_audio = np.clip(final_audio, -1.0, 1.0)
-            pcm_audio = (pcm_audio * 32767).astype(np.int16)
-            write_wav(output_path, SAMPLE_RATE, pcm_audio)
-            print(f"[DEBUG] Saved final audio to {output_path}")
+                    speaker_path = mapped_value
+                if os.path.exists(speaker_path):
+                    bark_history_prompt = load_history_prompt_npz(speaker_path)
+                else:
+                    print(f"[WARN] Speaker prompt file '{speaker_path}' not found.")
+            else:
+                bark_history_prompt = mapped_value
         else:
-            logger.error(f"[BARK ERROR] Job {job_id} failed: No valid audio was generated.")
-            job_status[job_id] = {
-                "status": "error",
-                "progress": 0,
-                "message": "No valid audio was generated."
-            }
-            raise ValueError("No valid audio was generated.")
-    except Exception as bark_error:
-        logging.exception(f"[BARK ERROR] Job {job_id} failed.")
-        job_status[job_id] = {
-            "status": "error",
-            "progress": 0,
-            "message": f"Bark synthesis failed: {bark_error}"
-        }
-        raise
+            print(f"[WARN] voice_preset '{voice_preset}' not found in VOICE_PRESET_MAP. Falling back.")
+    # Prepare Bark parameter values
+    _text_temp = float(text_temp) if text_temp not in (None, "") else 0.7
+    _top_k = int(top_k) if top_k not in (None, "") else 50
+    _top_p = float(top_p) if top_p not in (None, "") else 0.95
+    _seed = int(seed) if seed not in (None, "") else None
+    _voice_preset = voice_preset or "v2/en_speaker_9"
+    # Ensure top_k, top_p, seed are extracted from incoming request if not already
+    top_k = job.get("top_k")
+    top_p = job.get("top_p")
+    seed = job.get("seed")
+    for chunk_idx, chunk in enumerate(semantic_chunks):
+        attempt = 1
+        max_attempts = 2
+        chunk_success = False
+        chunk_audio = None
+        while attempt <= max_attempts and not chunk_success:
+            print(f"[DEBUG] Synthesizing chunk {chunk_idx+1}/{len(semantic_chunks)} (attempt {attempt})")
+            try:
+                # Use the advanced Bark synthesis pipeline supporting top_k, top_p, seed, etc.
+                audio_arr = synthesize_audio_with_bark(
+                    chunk,
+                    history_prompt=bark_history_prompt if bark_history_prompt is not None else _voice_preset,
+                    text_temp=_text_temp,
+                    waveform_temp=_text_temp,
+                    top_k=top_k if top_k not in (None, "") else _top_k,
+                    top_p=top_p if top_p not in (None, "") else _top_p,
+                    seed=seed if seed not in (None, "") else _seed,
+                )
+                # Check: if output is empty or gibberish, retry once
+                if audio_arr is None or (isinstance(audio_arr, np.ndarray) and audio_arr.size == 0):
+                    print(f"[WARN] Chunk {chunk_idx+1} synthesis failed (empty output).")
+                    if attempt == 1:
+                        print(f"Retrying chunk {chunk_idx+1}...")
+                    attempt += 1
+                    continue
+                duration_sec = len(audio_arr) / SAMPLE_RATE if hasattr(audio_arr, "__len__") else 0
+                if duration_sec < 0.2:
+                    print(f"[WARN] Chunk {chunk_idx+1} output too short ({duration_sec:.2f}s).")
+                    if attempt == 1:
+                        print(f"Retrying chunk {chunk_idx+1}...")
+                    attempt += 1
+                    continue
+                chunk_success = True
+                chunk_audio = audio_arr
+                print(f"[DEBUG] Chunk {chunk_idx+1} succeeded on attempt {attempt}.")
+            except Exception as e:
+                print(f"[ERROR] Exception during chunk {chunk_idx+1} synthesis (attempt {attempt}): {e}")
+                if attempt == 1:
+                    print(f"Retrying chunk {chunk_idx+1}...")
+                attempt += 1
+        if not chunk_success:
+            print(f"[ERROR] Failed to synthesize chunk {chunk_idx+1} after {max_attempts} attempts. Inserting silence.")
+            chunk_audio = np.zeros(SAMPLE_RATE // 2, dtype=np.float32)
+        audio_arrays.append(chunk_audio)
+        chunk_attempts.append(attempt)
+        # Progress update
+        if job_id is not None and job_status.get(job_id) is not None:
+            job_status[job_id]["chunk_index"] = chunk_idx + 1
+            job_status[job_id]["progress"] = int(100 * (chunk_idx + 1) / total_chunks)
 
+    # --- Merge chunks with silence buffer between ---
+    print("[DEBUG] Decoding and concatenating audio chunks with smooth merging...")
+    merged_audio = []
+    for idx, arr in enumerate(audio_arrays):
+        if arr is None or (isinstance(arr, np.ndarray) and arr.size == 0):
+            arr = np.zeros(SAMPLE_RATE // 2, dtype=np.float32)
+        merged_audio.append(arr)
+        if idx < len(audio_arrays) - 1:
+            silence = np.zeros(int(SAMPLE_RATE // 4), dtype=np.float32)
+            merged_audio.append(silence)
+            print(f"Inserted pause between chunk {idx+1} and {idx+2}")
+    merged_audio_np = np.concatenate(merged_audio)
+    write_wav(final_output_path, SAMPLE_RATE, merged_audio_np)
+    if job_id is not None and job_status.get(job_id) is not None:
+        job_status[job_id]["status"] = "done"
+        job_status[job_id]["progress"] = 100
+        job_status[job_id]["audio_url"] = f"/output/{os.path.basename(final_output_path)}"
+    print(f"[DEBUG] Bark synthesis complete. Output saved to {final_output_path}")
+    return final_output_path
+# -------------------------
+# Custom Bark synthesis function supporting advanced sampling parameters
+def synthesize_audio_with_bark(
+    text,
+    history_prompt=None,
+    text_temp=0.7,
+    waveform_temp=0.7,
+    top_k=None,
+    top_p=None,
+    seed=None,
+):
+    if seed is not None:
+        np.random.seed(seed)
+
+    semantic_tokens = generate_text_semantic(
+        text,
+        history_prompt=history_prompt,
+        temp=text_temp,
+        top_k=top_k,
+        top_p=top_p
+    )
+
+    coarse_tokens = generate_coarse(
+        semantic_tokens,
+        history_prompt=history_prompt,
+        temp=waveform_temp,
+    )
+
+    fine_tokens = generate_fine(
+        coarse_tokens,
+        history_prompt=history_prompt,
+    )
+
+    audio_array = codec_decode(fine_tokens)
+
+    return audio_array
+
+## Background job processor for handling queued TTS jobs.
 def process_jobs():
     while True:
         job = job_queue.get()
-        if job_status.get(job["job_id"], {}).get("status") == "cancelled":
-            continue
-        job_id = job["job_id"]
-        # If the user toggled the auto‑punctuation option, run the
-        # paragraph through the local LLM before sanitising / splitting.
-        raw_input_text = job["text"]
-        if job.get("smart_enhance"):
-            raw_input_text = enhance_text_with_llm(raw_input_text)
-        job_status[job_id]["status"] = "processing"
         try:
-            output_path = f"{OUTPUT_FOLDER}/speech_{job_id}.wav"
-            kwargs = {
-                "text": sanitize_text(raw_input_text),
-                "file_path": output_path,
-                "speed": job["speed"],
-                # XTTS config fields
-                "length_scale": job.get("length_scale", 1.0),
-                "noise_scale": job.get("noise_scale", 0.667),
-                "noise_scale_w": job.get("noise_scale_w", 0.8),
-            }
-            # Safety‑net: ensure a language code is passed for multilingual models
-            if "multilingual" in job["voice_name"] and not kwargs.get("language"):
-                kwargs["language"] = "en"
-            if job["speaker"]:
-                kwargs["speaker"] = job["speaker"]
-
-            # Handle XTTS speaker_wav upload
-            model_id = job.get("voice_name") or ""
-            speaker_wav_bytes = job.get("speaker_wav")
-            speaker_wav_name = job.get("speaker_wav_name")
-            if speaker_wav_bytes and speaker_wav_name:
-                speaker_path = f"{OUTPUT_FOLDER}/speaker_{job_id}.wav"
-                os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-                with open(speaker_path, "wb") as f:
-                    f.write(speaker_wav_bytes)
-                # Validate file existence and size before passing to the model
-                if os.path.exists(speaker_path):
-                    if os.path.getsize(speaker_path) == 0:
-                        raise ValueError(f"Speaker file at {speaker_path} is empty.")
-                else:
-                    raise FileNotFoundError(f"Speaker reference file not found at {speaker_path}")
-                # Validate and re-encode to ensure compatibility with torchaudio.load
-                try:
-                    audio = AudioSegment.from_file(speaker_path)
-                    audio = audio.set_channels(1).set_frame_rate(24000).set_sample_width(2)
-                    audio.export(speaker_path, format="wav")
-                except Exception as e:
-                    raise ValueError(f"Failed to auto-convert speaker reference to WAV format: {e}")
-                # Pass as speaker_wav for XTTS compatibility
-                kwargs["speaker_wav"] = speaker_path
-                print(f"[DEBUG] Saved speaker reference to {speaker_path}")
-            elif model_id == "tts_models/multilingual/multi-dataset/xtts_v2":
-                raise ValueError("XTTS requires a speaker_wav file, but none was provided.")
-
-            tts_instance = get_tts_instance(job["voice_name"])
-            if not tts_instance and not job.get("use_bark"):
-                raise RuntimeError("TTS model failed to load")
             if job.get("use_bark"):
-                try:
-                    synthesize_audio_with_bark(job, job_id, raw_input_text, output_path)
-                except Exception:
-                    continue
+                run_bark_synthesis(**job)
             else:
-                # Remove unsupported XTTS kwargs
-                model_path = job.get("voice_name", "")
-                settings = kwargs
-                # Sanitize settings for xtts_v2 to avoid passing unsupported model_kwargs
-                model_name = model_path.split("/")[-1] if "/" in model_path else model_path
-                if model_name == "xtts_v2":
-                    for key in ["length_scale", "noise_scale", "noise_scale_w"]:
-                        settings.pop(key, None)
-                tts_instance.tts_to_file(**settings)
-            job_status[job_id]["audio_url"] = f"/audio/{job_id}"
-            job_status[job_id]["status"] = "done"
-            # Always set progress to 100% on job completion for frontend
-            job_status[job_id]["progress"] = 100
-            job_status[job_id]["download_url"] = f"/audio/{job_id}"
-            job_status[job_id]["audio_url"] = f"/audio/{job_id}"
+                # Placeholder for VITS / XTTS jobs (not implemented yet)
+                print(f"[WARNING] Unsupported job type or model: {job}")
         except Exception as e:
-            logging.exception(f"Job {job_id} failed")
-            job_status[job_id] = {"status": "error", "progress": 0, "message": str(e)}
+            print(f"[ERROR] Failed to process job: {e}")
+        finally:
+            job_queue.task_done()
 
-Thread(target=process_jobs, daemon=True).start()
-
-#
-# Serves the generated audio file for a completed job.
-@app.route("/audio/<job_id>", methods=["GET"])
-def get_audio(job_id):
-    info = job_status.get(job_id)
-    if not info or info.get("status") != "done":
-        return jsonify({"error": "Audio not available."}), 404
-    return send_file(f"{OUTPUT_FOLDER}/speech_{job_id}.wav", as_attachment=True)
-
-#
-# Returns the list of available voices and their metadata.
-@app.route("/voices", methods=["GET"])
-def list_voices():
-    print("📢 Listing available voices")
-    # Include supported_speakers in the response for frontend secondary dropdowns
-    voices_with_speakers = []
-    for voice in AVAILABLE_VOICES:
-        voices_with_speakers.append({
-            "name": voice["name"],
-            "model": voice["model"],
-            "requires_language": voice["requires_language"],
-            "requires_speaker_wav": voice["requires_speaker_wav"],
-            "supported_languages": voice["supported_languages"],
-            "supported_speakers": voice["supported_speakers"],
-            "presets": voice.get("presets", []),
-            "description": voice.get("description", ""),
-            "tokens": voice.get("tokens", [])
-        })
-    return jsonify({"voices": voices_with_speakers})
-
-#
-# Root endpoint: returns a status message.
-@app.route("/")
-def home():
-    return "Coqui TTS backend running. Use /generate for speech synthesis."
-
-#
-# Text enhancement endpoint: applies LLM-based enhancements.
-@app.route("/enhance", methods=["POST"])
-def enhance():
-    data = request.get_json()
-    if not data or "text" not in data:
-        return jsonify({"error": "No text provided"}), 400
-    text = data["text"]
-    instruction = data.get("instruction", "")
-    try:
-        enhanced = enhance_text(text, instruction)
-    except Exception as e:
-        logging.exception("LLM enhancement error")
-        return jsonify({"error": "Enhancement failed"}), 500
-    return jsonify({"enhanced_text": enhanced})
-
-# ------------------------------------------------------------------
-# Entry point: confirm app is running when executed directly.
+# Ensure Flask app runs when executed directly
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    print("✅ Flask app starting...")
-    app.run(host="0.0.0.0", port=5000)
-
-
-
-# ------------------------------------------------------------------
-# Dedicated endpoints for CRUD operations on saved voice profiles
-
-@app.route("/save_voice", methods=["POST"])
-def save_voice():
-    data = request.get_json()
-    name = data.get("name")
-    if not name:
-        return jsonify({"error": "Missing voice name"}), 400
-    saved_voices[name] = {
-        "name": name,
-        "seed": data.get("seed"),
-        "text_temp": data.get("text_temp"),
-        "top_k": data.get("top_k"),
-        "top_p": data.get("top_p"),
-        "pinned": data.get("pinned", False)
-    }
-    return jsonify({"message": f"Voice '{name}' saved."})
-
-@app.route("/saved_voices", methods=["GET"])
-def get_saved_voices():
-    # Return as a list of dicts for frontend
-    return jsonify(list(saved_voices.values()))
-
-@app.route("/saved_voices/<name>", methods=["PUT"])
-def update_voice(name):
-    if name not in saved_voices:
-        return jsonify({"error": "Voice not found"}), 404
-    data = request.get_json()
-    saved_voices[name].update(data)
-    return jsonify({"message": f"Voice '{name}' updated."})
-
-@app.route("/saved_voices/<name>", methods=["DELETE"])
-def delete_voice(name):
-    if name in saved_voices:
-        del saved_voices[name]
-        return jsonify({"message": f"Voice '{name}' deleted."})
-    return jsonify({"error": "Voice not found"}), 404
-
-#
-# Example VITS synthesis endpoint (stub)
-@app.route("/synthesize_vits", methods=["POST"])
-def synthesize_vits():
-    """
-    Endpoint to synthesize speech using VITS with extra parameters.
-    """
-    try:
-        text = request.form.get("text", "").strip()
-        # Extract additional parameters from the form
-        speaker_id = request.form.get("speaker_id", None)
-        noise_scale = float(request.form.get("noise_scale", 0.667))
-        duration_scale = float(request.form.get("duration_scale", 1.0))
-        use_phonemes = request.form.get("use_phonemes", "false").lower() == "true"
-        # Call the VITS audio generator with all parameters
-        audio = synthesize_audio_with_vits(
-            text=text,
-            speaker_id=speaker_id,
-            noise_scale=noise_scale,
-            duration_scale=duration_scale,
-            use_phonemes=use_phonemes
-        )
-        # For now, since the function is stubbed, just return a message
-        return jsonify({
-            "status": "ok",
-            "message": "VITS synthesis stub called.",
-            "params": {
-                "text": text,
-                "speaker_id": speaker_id,
-                "noise_scale": noise_scale,
-                "duration_scale": duration_scale,
-                "use_phonemes": use_phonemes
-            }
-        })
-    except Exception as e:
-        logging.exception("Error in synthesize_vits endpoint")
-        return jsonify({"error": f"Internal error: {e}"}), 500
+    preload_models()
+    from threading import Thread
+    Thread(target=process_jobs, daemon=True).start()
+    app.run(debug=True)

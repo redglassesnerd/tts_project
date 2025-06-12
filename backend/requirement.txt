@@ -1,13 +1,21 @@
-Flask>=2.2.2,<2.3
-werkzeug<2.3
-flask-cors==3.0.10
-torch>=2.0.0
-torchaudio>=2.0.0
-soundfile
-numpy
+flask
+flask-cors
+numpy<2.0.0
+numba<0.59
 scipy
+tqdm
+torchaudio
+torch
+transformers
+soundfile
+requests
+python-dotenv
+loguru
 inflect
 librosa
+ffmpeg
+pydub
+spacy
 progressbar2
 rotary-embedding-torch
 unidecode
@@ -15,3 +23,6 @@ TTS
 llama-cpp-python==0.2.56
 git+https://github.com/suno-ai/bark.git
 nltk
+# Note: pydub requires ffmpeg to be installed on the system
+# Download required SpaCy models
+python -m spacy download en_core_web_sm
