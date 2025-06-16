@@ -36,12 +36,16 @@ def process_jobs():
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module="torch.nn.utils.weight_norm")
 
+
+# --- Device selection utility ---
 import torch
-if torch.backends.mps.is_available():
-    device = torch.device("mps")
-    torch.set_default_dtype(torch.float32)
-else:
-    device = torch.device("cpu")
+
+def get_torch_device(use_mps: bool = False):
+    if use_mps and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        print("[DEBUG] Apple MPS is available and selected.")
+        return torch.device("mps")
+    print(f"[DEBUG] Apple MPS not used or not available. use_mps={use_mps}, torch.backends.mps.is_available()={torch.backends.mps.is_available()}, torch.backends.mps.is_built()={torch.backends.mps.is_built()}")
+    return torch.device("cpu")
 
 # ────────────── Bark low-level imports for advanced synthesis ──────────────
 from bark.generation import (
@@ -137,28 +141,6 @@ from threading import Thread
 from queue import Queue
 from llm_wrapper import enhance_text
 
-# ────────────────────────────────────────────────────────────────
-# Optional lightweight, fully‑offline LLM for auto punctuation /
-# pause insertion.  The model file (e.g. `ggml‑tiny.en.bin`) can be
-# placed in `backend/llama.cpp/models/` or a custom path supplied
-# via the `LLAMA_MODEL_PATH` env var.
-try:
-    from llama_cpp import Llama
-
-    LLAMA_MODEL_PATH = os.getenv(
-        "LLAMA_MODEL_PATH",
-        os.path.join(
-            os.path.dirname(__file__), "llama.cpp", "models", "ggml‑tiny.en.bin"
-        ),
-    )
-    llm = (
-        Llama(model_path=LLAMA_MODEL_PATH, n_ctx=2048)
-        if os.path.exists(LLAMA_MODEL_PATH)
-        else None
-    )
-except Exception:
-    llm = None  # Llama‑cpp not installed or model file missing
-# ────────────────────────────────────────────────────────────────
 from bark.generation import generate_text_semantic, generate_coarse, generate_fine, codec_decode
 from bark.generation import preload_models
 from scipy.io.wavfile import write as write_wav
@@ -184,13 +166,27 @@ CORS(app)
 def preprocess():
     data = request.get_json() or {}
     raw_text = data.get("text", "")
-    voice_dir = data.get("voice_direction", "")
-    enhanced_text = (
-        enhance_text_with_llm(raw_text)
-        if voice_dir.strip()
-        else sanitize_text(raw_text)
-    )
+    enhanced_text = sanitize_text(raw_text)
     return jsonify({"text": enhanced_text})
+
+
+# ------------------------------------------------------------------
+# /enhance endpoint for Bark AI Enhance feature (frontend uses this)
+from flask_cors import cross_origin
+
+@app.route("/enhance", methods=["POST"])
+@cross_origin()
+def enhance():
+    data = request.get_json() or {}
+    text = data.get("text", "")
+    instruction = data.get("instruction", "")
+    creativity = data.get("creativity", 0.4)
+    try:
+        creativity = float(creativity)
+    except Exception:
+        creativity = 0.4
+    enhanced_text = enhance_text(text, instruction, creativity)
+    return jsonify({"enhanced_text": enhanced_text})
 
 
 # ------------------------------------------------------------------
@@ -435,33 +431,6 @@ def get_tts_instance(model_name):
 
 
 # ------------------------------------------------------------------
-# Use the offline Llama model to insert punctuation & SSML breaks.
-def enhance_text_with_llm(raw_text: str) -> str:
-    """
-    Very lightweight prompt that asks the local LLM to
-    1) add standard English punctuation,
-    2) insert <break time="0.6s"/> between major thoughts.
-    Falls back to the original text if Llama is unavailable.
-    """
-    if not llm:
-        return raw_text.strip()
-
-    prompt = (
-        "You are a helpful assistant that fixes punctuation in a paragraph "
-        'and inserts the tag <break time="0.6s"/> wherever the narrator '
-        "should pause for breath.  Return ONLY the corrected text.\n\n"
-        f"### INPUT:\n{raw_text.strip()}\n\n### OUTPUT:\n"
-    )
-    try:
-        completion = llm(prompt, max_tokens=512, stop=["###"])
-        improved = completion["choices"][0]["text"].strip()
-        return improved if improved else raw_text.strip()
-    except Exception as e:
-        logging.exception("LLM text enhancement failed")
-        return raw_text.strip()
-
-
-# ------------------------------------------------------------------
 
 
 def sanitize_text(text):
@@ -491,7 +460,9 @@ def sanitize_text(text):
 
     # Remove [bracketed] tokens EXCEPT those in allowed_tokens (case-sensitive, preserve case)
     def token_replacer(m):
-        token = m.group(0)
+        token = m.group(0).strip()
+        if token not in allowed_tokens:
+            print(f"[DEBUG] Stripped unknown token: {token}")
         return token if token in allowed_tokens else ""
 
     # Only replace bracketed tokens that do not match the allowed list exactly
@@ -941,6 +912,18 @@ def run_bark_synthesis(
     from scipy.io.wavfile import write as write_wav
     logger = logging.getLogger("bark")
 
+    # --- Device selection logic based on use_mps setting ---
+    # The frontend should send a setting "use_mps" to control this.
+    job = locals()
+    data = job
+    use_mps = data.get("use_mps", False)
+    if use_mps and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        torch_device = "mps"
+    else:
+        torch_device = "cpu"
+    print(f"[DEBUG] Apple MPS status - Requested: {use_mps}, Available: {torch.backends.mps.is_available()}, Built: {torch.backends.mps.is_built()}")
+    print(f"[DEBUG] Final torch_device set to: {torch_device} (MPS requested: {use_mps})")
+
     raw_input_text = text
     processed_text = sanitize_text(raw_input_text) if raw_input_text is not None else sanitize_text(text)
     final_output_path = f"output/{job_id}_final.wav" if job_id else "output/final.wav"
@@ -1126,7 +1109,8 @@ def run_bark_synthesis(
 
     # --- Merge chunks with silence buffer between ---
     print("[DEBUG] Decoding and concatenating audio chunks with smooth merging...")
-    merged_audio = []
+    intro_silence = np.zeros(int(SAMPLE_RATE * 0.25), dtype=np.float32)
+    merged_audio = [intro_silence]
     for idx, arr in enumerate(audio_arrays):
         if arr is None or (isinstance(arr, np.ndarray) and arr.size == 0):
             arr = np.zeros(SAMPLE_RATE // 2, dtype=np.float32)
@@ -1201,3 +1185,32 @@ if __name__ == "__main__":
     from threading import Thread
     Thread(target=process_jobs, daemon=True).start()
     app.run(debug=True)
+# ------------------------------------------------------------------
+# Enhance endpoint for local LLM-based text enhancement (“AI Enhance”)
+@app.route("/enhance", methods=["POST"])
+def enhance():
+    data = request.get_json() or {}
+    text = data.get("text", "")
+    instruction = data.get("instruction", "")
+    # Read extra params for smartEnhance
+    creativity = data.get("creativity", 0.4)
+    min_tokens = data.get("min_tokens", 0)
+    # Pass these to enhance_text if needed (extend function signature if using)
+    # For now, inject into the prompt if present
+    extra_instruction = ""
+    if creativity is not None:
+        try:
+            creativity_val = float(creativity)
+            extra_instruction += f"\n[Creativity: {creativity_val}]"
+        except Exception:
+            pass
+    if min_tokens is not None:
+        try:
+            min_tokens_val = int(min_tokens)
+            if min_tokens_val > 0:
+                extra_instruction += f"\n[Minimum tokens per paragraph: {min_tokens_val}]"
+        except Exception:
+            pass
+    effective_instruction = (instruction or "") + extra_instruction
+    enhanced_text = enhance_text(text, effective_instruction)
+    return jsonify({"enhanced_text": enhanced_text})

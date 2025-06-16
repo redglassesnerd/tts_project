@@ -1,159 +1,175 @@
-"""
-Light‑weight local text‑enhancement helper.
-
-1. Adds punctuation (comma / period / ellipsis) using a tiny offline model.
-2. Optionally prepends a bracketed instruction tag the TTS engine can
-   interpret for tone or style hints (e.g. "[sad]" or "[excited]").
-
-The function is deliberately simple so it runs quickly on‑device.
-Caching avoids re‑processing identical input + instruction pairs.
-"""
-
-from llama_cpp import Llama
-from diskcache import Cache
-import hashlib
-import pathlib
-import os
+import requests
+import json
 import re
+import os
 
-MODEL_PATH = pathlib.Path(__file__).parent / "models" / "tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
-LLM = Llama(
-    model_path=str(MODEL_PATH),
-    n_gpu_layers=35,
-    n_ctx=2048,
-    n_threads=os.cpu_count(),
-)
-cache = Cache("./enhancer_cache")
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "mistral"
+DEFAULT_TEMP = 0.4
+MAX_TOKENS = 1024
 
-ALLOWED_BARK_TOKENS = {
-    "laughter", "laughs", "sighs", "music", "gasps", "clears throat", "whispers",
-    "giggles", "snickers", "coughs", "groans", "yells", "whimpers", "sobs", "murmurs",
-    "chuckles", "hums", "sneezes", "grunts", "shrieks", "hiccups", "stammers", "stutters",
-    "grumbles", "snorts", "howls", "moans", "guffaws", "sighs deeply", "laughs nervously",
-    "cries", "sniffs", "smacks lips", "claps", "yawns", "mumbles", "shushes", "exhales sharply",
-    "snaps", "whistles", "crunches", "slurps", "clicks", "clinks", "clatters", "sizzles",
-    "rustles", "splashes", "taps", "thumps", "rumbles", "drums", "jingles", "jangles",
-    "pops", "bangs", "hisses", "scratches", "squeaks", "screeches", "buzzes", "swooshes",
-    "swoops", "clangs", "whirrs", "chirps", "beeps", "tick-tocks", "thuds", "swishes",
-    "crackles", "fizzes", "humming"
-}
+# Load local JSON config for tag definitions and mappings
+def load_prompt_profile():
+    path = os.path.join(os.path.dirname(__file__), "prompts", "bark_emotion_tag_mapping.json")
+    with open(path, "r") as f:
+        profile = json.load(f)
+        return profile, profile  # legacy support
 
-ALLOWED_BARK_TOKEN_MAP = {tok.lower(): tok for tok in ALLOWED_BARK_TOKENS}
-
-BASE_RULES = f"""Add expressive vocal tokens to the text below to make it sound more human and emotional.
-
-Use tokens like: {', '.join(f'[{token}]' for token in ALLOWED_BARK_TOKENS)}.
-
-Only insert tokens between words. Do not delete, change, or rearrange the original text.
-
-Include multiple tokens spread throughout the piece. Think like a voice actor—where would you breathe, laugh, whisper, or sigh?
-
-Avoid clumping tokens at the start or end. Space them out naturally.
-
-Do not add any explanation or commentary—return only the annotated text.
-"""
-
-EXAMPLE_USAGE = """
-Example 1:
-Input: She whispered the secret and then laughed quietly.
-Output: She[whispering] whispered the secret and then[laughter] laughed quietly.
-
-Example 2:
-Input: He ran down the hallway, gasping and shouting her name.
-Output: He[gasping] ran down the hallway, [shouting] shouting her name.
-
-Example 3:
-Input: Make it sound like a quiet, emotional conversation.
-Output: "I didn’t mean to..."[sighs] she said[whispers]. "Please understand."
-
-Example 4:
-Input: Make it comedic in tone, with punchy breaks and laughter.
-Output: So I walk into the room...[chuckles] and guess what I see? [snorts] A duck—yes, a duck—[laughs] wearing sunglasses.
-
-Example 5:
-Input: Make this feel very natural, human, and full of character. Add emotional sounds or expressions where they fit.
-Output: "You came back for me?"[gasping] she said. "After all this time..."[sighs] His eyes narrowed[chuckles]. "Well, I guess miracles happen." He stepped closer, [clears throat] "But you owe me an explanation."
-"""
-
-PROMPT_TEMPLATE = """SYSTEM:
-You are a voice-enhancement assistant. Enrich the user’s text with expressive vocal markers for use in a text-to-speech engine.
-
-{rules}
-
-=== USER TEXT START ===
-{text}
-=== USER TEXT END ===
-
-If the user includes tone or style instructions, interpret them creatively using only the allowed tokens or natural punctuation.
-
-Return only the annotated version of the text. No extra comments or explanation.
-
-Include multiple expressive tokens and distribute them throughout the full text to simulate realistic, emotive delivery.
-"""
-
-def enhance_text(text: str, instruction: str = "", model_id: str = "bark") -> str:
-    key = hashlib.sha256((text + instruction).encode()).hexdigest()
-    if key in cache:
-        return cache[key]
-
-    # Trim example usage for long inputs
-    trimmed_examples = EXAMPLE_USAGE
-    if len(text.split()) > 300:
-        trimmed_examples = "\n".join(EXAMPLE_USAGE.split("\n")[:10])
-
-    rules = BASE_RULES + "\n\n" + trimmed_examples
-    rules += "\n\nAdditional tone/style instruction: "
-    rules += instruction.strip() or "Add expressive vocal cues like [gasping], [laughs], [sighs], etc., in ways that fit the text naturally, as if performed by a dramatic voice actor. Capture emotion and variation in tone using the allowed token set."
-
-    full_prompt = PROMPT_TEMPLATE.format(rules=rules, text=text)
-    approx_prompt_tokens = len(full_prompt.split())
-    max_tokens_estimate = max(64, min(2048 - approx_prompt_tokens, 512))
-
+# Call Ollama model
+def LLM(prompt, temperature=DEFAULT_TEMP, max_tokens=MAX_TOKENS):
     try:
-        result = LLM(
-            full_prompt,
-            max_tokens=max_tokens_estimate,
-            temperature=0.4,
-            top_p=0.95,
-            stop=["USER:", "SYSTEM:"],
-        )
-        cleaned = result["choices"][0]["text"].strip()
-        if "[" not in cleaned:
-            cleaned = re.sub(r"(\.|\!|\?)", r"[sighs]\1", cleaned, count=1)
+        chat_url = "http://localhost:11434/api/chat"
+        messages = [{"role": "user", "content": prompt}]
+        payload = {
+            "model": OLLAMA_MODEL,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": False
+        }
+
+        headers = {"Content-Type": "application/json"}
+        print(f"\n\n[DEBUG] --- LLM Prompt ---\n{prompt}\n--- End Prompt ---\n")
+        response = requests.post(chat_url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        return response.json()["message"]["content"].strip()
     except Exception as e:
-        print("LLM generation error:", e)
-        return text
+        print(f"[LLM ERROR] Ollama failed: {e}")
+        return ""
 
-    # Sanitize based on model
-    if model_id.startswith("tts_models/multilingual/multi-dataset/xtts"):
-        cleaned = re.sub(r"\[(.*?)\]", "", cleaned)
-    elif model_id.startswith("bark"):
-        def _filter(m):
-            token_raw = m.group(1).strip()
-            canon = ALLOWED_BARK_TOKEN_MAP.get(token_raw.lower())
-            return f"[{canon}]" if canon else ""
-        cleaned = re.sub(r"\[(.*?)\]", _filter, cleaned)
+# Build the prompt for enhancement
+def build_enhancement_prompt(paragraph, tone_summary, tag_profile, emotion_map, creativity=DEFAULT_TEMP):
+    tag_guidance = []
+    for category, tags in tag_profile.get("tag_definitions", {}).items():
+        for tag, meaning in tags.items():
+            tag_guidance.append(f"[{tag}] — {meaning}")
+    emotion_mappings = []
+    for emotion, tags in emotion_map.get("emotion_tag_mapping", {}).items():
+        emotion_mappings.append(f"{emotion}: {', '.join(tags)}")
 
-    instruction_lc = instruction.lower()
+    # Adjust instructions based on creativity
+    if creativity <= 0.4:
+        creativity_note = "Be subtle, minimal, and sparse with tag use. Only add tags where truly justified, and avoid over-embellishing the text."
+    elif creativity >= 0.8:
+        creativity_note = "Be expressive, emotional, and generous with tag placement. Emphasize drama and nuance; add tags for emotional effect, even if not strictly necessary."
+    else:
+        creativity_note = "Balance clarity and expressiveness. Use tags where they add value, but do not overuse."
 
-    if "less tags" in instruction_lc:
-        tokens = re.findall(r"\[(.*?)\]", cleaned)
-        if len(tokens) > 2:
-            allowed = tokens[:2]
-            cleaned = re.sub(r"\[(.*?)\]", "", cleaned)
-            for token in allowed:
-                cleaned = re.sub(r"(\b\w+\b)", r"\1[{}]".format(token), cleaned, count=1)
+    return f"""
+You are a vocal director for an AI narrator.
 
-    if "longer gaps" in instruction_lc:
-        cleaned = re.sub(r"([.!?])(\s*)", r"\1 ...\2", cleaned)
+Task:
+Add expressive Bark tags (e.g., [sigh], [pause_long], [shout]) to this paragraph based on tone and emotion.
 
-    if "after each sentence add a laugh" in instruction_lc:
-        cleaned = re.sub(r"([.!?])(\s*)", r"\1[laughter]\2", cleaned)
+Instructions:
+- DO NOT rephrase or explain. Only insert tags inline.
+- Use only Bark-supported tags below.
+- Place tags *before* the line or sentence they describe, ideally within quotation marks if dialogue.
+- Avoid placing tags on blank lines or before formatting characters (e.g., em dashes, quotation marks on separate lines).
+- Use no more than 2 tags of the same type per paragraph unless dramatically justified.
+- Consider the speaker: Sarah’s dialogue may trend toward [angry], [shout], [growl]; Kimmy’s internal reflections lean toward [sigh], [pause_long], [soft].
+- {creativity_note}
 
-    # Basic validation
-    def _tok(s): return re.findall(r"\b[\w']+\b", s.lower())
-    if _tok(text) != _tok(re.sub(r"\[(.*?)\]", "", cleaned)):
-        cleaned = text
+Formatting Notes:
+- Use standard line breaks `\\n` and avoid excessive indentation.
+- Return a single enhanced paragraph with tag placements integrated inline.
+- Do not include extra commentary or markup beyond Bark tags.
 
-    cache[key] = cleaned
-    return cleaned
+Tone summary: {tone_summary}
+
+Supported Tags:
+{chr(10).join(tag_guidance)}
+
+Emotion → Tag Hints:
+{chr(10).join(emotion_mappings)}
+
+Paragraph:
+{paragraph}
+""".strip()
+
+# Main enhancer
+def enhance_text(text, instruction="", creativity=DEFAULT_TEMP):
+    tag_profile, emotion_map = load_prompt_profile()
+    tone_prompt = f"""
+    You are analyzing a dramatic monologue for performance.
+
+    Task:
+    Summarize the overall emotional tone, pacing, and dramatic intent of the text in 1–2 sentences, as if advising a voice actor.
+
+    Avoid factual corrections. Focus only on mood, tension, emotional arc, and style.
+
+    Text:
+    {text}
+
+    Tone Summary:""".strip()
+    tone_summary = LLM(tone_prompt, temperature=creativity)
+    tone_summary = tone_summary or "Reflective, bittersweet, emotionally rich monologue with themes of loss and empathy."
+
+    # Preserve paragraph breaks and avoid stripping blank lines or multiple spaces
+    # Split on double newlines to preserve paragraphs
+    paragraph_blocks = re.split(r'(\n\s*\n)', text)
+    enhanced = []
+    for block in paragraph_blocks:
+        # If block is just whitespace or a blank line, preserve as is
+        if not block.strip():
+            enhanced.append(block)
+            continue
+        # Remove only leading/trailing newlines, preserve inner formatting
+        para = block.strip("\r\n")
+        if not para:
+            enhanced.append(block)
+            continue
+        prompt = build_enhancement_prompt(
+            para, f"{tone_summary}. {instruction}", tag_profile, emotion_map, creativity=creativity
+        )
+        print(f"[DEBUG] Final prompt being sent for paragraph:\n{prompt}")
+        result = LLM(prompt, temperature=creativity)
+
+        # Strip LLM commentary if present
+        lines = [line.rstrip() for line in result.splitlines()]
+        content = []
+        for line in lines:
+            if re.search(r"^\s*(note|explanation|output|result|tone|label)[:\s]", line.lower()):
+                continue
+            if line.lower().startswith("the word") and "appears most frequently" in line.lower():
+                continue
+            content.append(line)
+        enhanced_para = "\n".join(content).strip()
+
+        # Clean out any residual "×" characters from the enhanced paragraph
+        enhanced_para = enhanced_para.replace("×", "")
+
+        # --- Strip unnecessary quotes around Bark tags ---
+        # Replace occurrences like "[ 'sigh' ]", '"crack"', or "'sigh'" with [sigh]
+        # This will match tags in single/double quotes, possibly with brackets
+        # e.g., "[\"sigh\"]" or "'crack'" or '"sigh"'
+        def strip_quotes_around_bark_tags(text):
+            # Replace '"[tag]"' or "'[tag]'" with [tag]
+            text = re.sub(r'["\']\s*(\[[a-zA-Z0-9_\- ]+\])\s*["\']', r'\1', text)
+            # Replace ["tag"] or ['tag'] (no brackets) with [tag]
+            text = re.sub(r'\[\s*["\']([a-zA-Z0-9_\- ]+)["\']\s*\]', r'[\1]', text)
+            # Replace just "tag" or 'tag' (not inside []) with [tag] if tag is a Bark token
+            # get all Bark tokens
+            bark_tokens = set()
+            for category, tags in tag_profile.get("tag_definitions", {}).items():
+                bark_tokens.update(tags.keys())
+            # Replace "tag" or 'tag' with [tag] if tag is a Bark token
+            def replace_quoted_tag(m):
+                tag = m.group(2)
+                if tag in bark_tokens:
+                    return f"[{tag}]"
+                return m.group(0)
+            # Match "tag" or 'tag' as a word, not inside [] or within a word
+            text = re.sub(r'(^|[\s.,;:!?])([\'"]([a-zA-Z0-9_\- ]+)[\'"])(?=[\s.,;:!?]|$)', replace_quoted_tag, text)
+            return text
+
+        enhanced_para = strip_quotes_around_bark_tags(enhanced_para)
+
+        # Heuristic fallback
+        if "[" not in enhanced_para:
+            print("[LLM WARNING] No tags found; using original paragraph.")
+            enhanced.append(block)
+        else:
+            enhanced.append(enhanced_para)
+
+    return "".join(enhanced).strip()

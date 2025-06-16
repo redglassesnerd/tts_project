@@ -1,0 +1,38 @@
+{
+  "tag_usage_rules": {
+    "max_tags_per_paragraph": 3,
+    "min_tags_per_paragraph": 0,
+    "no_duplicate_tags_per_paragraph": true,
+    "pause_usage": "Use [pause_short] or [pause_long] to guide rhythm and emphasis.",
+    "user_prompt_priority": "Always prioritize user-specified tone and direction.",
+    "tag_placement": "Insert tags before, within, or after the most expressive parts of a sentence.",
+    "text_integrity": "Do not add, remove, or change the user's original text."
+  },
+  "example_before_after": {
+    "original": "I don\u2019t eat chicken anymore. Not because I\u2019m better than anyone else. But because now, when I see one, I see Maple.",
+    "tagged": "I don\u2019t eat chicken anymore. [sad] Not because I\u2019m better than anyone else. [pause_short] But because now, when I see one, I see Maple. [soft]"
+  },
+  "overview": "Read the full text first to establish the overall emotional intent. Then, for each paragraph or major sentence group, identify its purpose and mood. Insert official Bark tags sparingly and only where they enhance emotional or dramatic delivery. Do not change the original text content.",
+  "strategy": "Treat the tagging process as a form of voice direction. Determine if the text segment is building tension, releasing it, delivering a punchline, reflecting inward, or evoking sympathy. Use this to guide appropriate tag placement.",
+  "instructions": "Only use Bark tags exactly as listed in the official documentation. Never invent or modify tags. Do not rewrite any original sentence content.",
+  "guidance": {
+    "pause": {
+      "use": ["[pause_short]", "[pause_long]"],
+      "when": "Use when a dramatic beat or moment of reflection is needed between thoughts."
+    },
+    "tone_shift": {
+      "tip": "Look for emotional transitions or contrast — e.g., joy to sadness, sarcasm to sincerity."
+    },
+    "sentence_rhythm": {
+      "tip": "Use tags like [sigh] or [whispers] to change rhythm without altering meaning."
+    },
+    "contextual_awareness": {
+      "tip": "Refer to previous sentences to decide if a tag is reinforcing or undermining the tone."
+    }
+  },
+  "format_instructions": {
+    "objective": "Enhance the original text with expressive Bark vocal tags based on emotional and dramatic intent.",
+    "style": "Act as a skilled voice actor and narrator, applying dramatic theory and emotional nuance.",
+    "output_format": "Return the original text with inline Bark tags inserted. Do not include explanations or summaries."
+  }
+}

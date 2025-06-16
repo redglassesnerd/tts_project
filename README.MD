@@ -23,10 +23,10 @@ A simple Flask + React application for text-to-speech using [Coqui TTS](https://
 1. Download a GGML/GGUF model — the 23 MB English‑only tiny model works great:
 
    `curl -L -o backend/llama.cpp/models/ggml-tiny.en.bin \
-  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin`
+https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin`
 
    (create the `backend/llama.cpp/models` folder if it doesn’t exist).  
-   You can use any other GGML / GGUF model; just adjust the filename.
+    You can use any other GGML / GGUF model; just adjust the filename.
 
 2. **OR** put the model anywhere else and set  
    `export LLAMA_MODEL_PATH=/full/path/to/your_model.bin`

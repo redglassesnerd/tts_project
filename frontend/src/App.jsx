@@ -66,6 +66,18 @@ function AppInner({ barkPresets, setBarkPresets }) {
     }
   });
 
+  // --- Bark Use MPS setting (persistent) ---
+  const [barkSettings, setBarkSettings] = useState(() => {
+    try {
+      return {
+        use_mps: localStorage.getItem("barkUseMps") === "true" ? true : false,
+        // Add other bark settings here if needed
+      };
+    } catch {
+      return { use_mps: false };
+    }
+  });
+
   // Bark advanced knobs
   const [barkTemperature, setBarkTemperature] = useState(0.7); // 0‑1 precise → creative
   const [barkTopK, setBarkTopK] = useState(50); // 0‑100 smaller → larger vocab
@@ -84,6 +96,8 @@ function AppInner({ barkPresets, setBarkPresets }) {
   const [smartEnhance, setSmartEnhance] = useState(false); // offline LLM punctuation
   const [enhancePrompt, setEnhancePrompt] = useState("");
   const [isEnhancing, setIsEnhancing] = useState(false);
+  // AI Enhance advanced sliders
+  const [enhanceCreativity, setEnhanceCreativity] = useState(0.4);
   const [queue, setQueue] = useState([]);
   const [showQueue, setShowQueue] = useState(false);
   const [unreadCompletions, setUnreadCompletions] = useState(0);
@@ -182,6 +196,47 @@ function AppInner({ barkPresets, setBarkPresets }) {
     });
   }, []);
 
+  // ---- Load persisted queue from localStorage and rehydrate jobs ----
+  useEffect(() => {
+    const savedJobs = JSON.parse(localStorage.getItem("savedQueue")) || [];
+    const now = Date.now();
+    const freshJobs = savedJobs.filter(
+      (job) => now - job.timestamp < 12 * 60 * 60 * 1000
+    ); // 12 hours max age
+
+    freshJobs.forEach((job) => {
+      fetch(`http://localhost:5000/status/${job.id}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Job not found");
+          return res.json();
+        })
+        .then((data) => {
+          setQueue((prev) => [
+            ...prev,
+            {
+              id: job.id,
+              text: job.text,
+              status: data.status,
+              progress: data.progress || 0,
+              downloadUrl: data.audio_url
+                ? `http://localhost:5000${data.audio_url}`
+                : undefined,
+              chunkIndex: data.chunk_index ?? null,
+              totalChunks: data.total_chunks ?? null,
+            },
+          ]);
+          if (data.status !== "done") {
+            startPolling(job.id);
+          }
+        })
+        .catch(() => {
+          // Cleanup stale entry
+          const updated = savedJobs.filter((j) => j.id !== job.id);
+          localStorage.setItem("savedQueue", JSON.stringify(updated));
+        });
+    });
+  }, []);
+
   /* ---------- React to voice change ---------- */
   useEffect(() => {
     if (selectedVoiceData?.supported_languages?.length) {
@@ -232,6 +287,7 @@ function AppInner({ barkPresets, setBarkPresets }) {
       .post("http://localhost:5000/enhance", {
         text,
         instruction: enhancePrompt,
+        creativity: enhanceCreativity,
       })
       .then((res) => {
         setText(res.data.enhanced_text);
@@ -279,7 +335,13 @@ function AppInner({ barkPresets, setBarkPresets }) {
           setQueue((prev) =>
             prev.map((item) =>
               item.id === jobId
-                ? { ...item, status: data.status, progress: data.progress || 0 }
+                ? {
+                    ...item,
+                    status: data.status,
+                    progress: data.progress || 0,
+                    chunkIndex: data.chunk_index ?? null,
+                    totalChunks: data.total_chunks ?? null,
+                  }
                 : item
             )
           );
@@ -338,10 +400,9 @@ function AppInner({ barkPresets, setBarkPresets }) {
     // If Bark, send as JSON, else as FormData (for speaker_wav uploads)
     if (selectedVoiceData?.model?.toLowerCase().includes("bark")) {
       // Bark: send as JSON, include barkSplitSentences and barkMaxDuration
-      const body = {
-        model: selectedVoice,
+      const payload = {
+        model: "bark",
         text,
-        // Bark-specific
         temperature: barkTemperature,
         top_k: barkTopK,
         top_p: barkTopP,
@@ -352,18 +413,23 @@ function AppInner({ barkPresets, setBarkPresets }) {
         chunk_size: chunkSize,
         pause_duration: pauseDuration,
         smart_enhance: smartEnhance,
-        // Optionals
-        voice: selectedVoice, // explicitly include voice
-        preset: voicePreset, // explicitly include preset
-        voice_preset: voicePreset, // keep for backward compatibility
+        voice: selectedVoice,
+        preset: voicePreset,
+        voice_preset: voicePreset,
         language,
         speaker,
+        use_mps: barkSettings.use_mps,
+        text_temp: barkTemperature,
+        focus: barkTopP,
+        pool: barkTopK,
       };
+      // Diagnostic log for use_mps
+      console.log("Sending use_mps:", payload.use_mps);
       try {
         const response = await fetch("http://localhost:5000/generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(payload),
         });
         const data = await response.json();
         jobId = data.job_id;
@@ -388,6 +454,10 @@ function AppInner({ barkPresets, setBarkPresets }) {
               : item
           )
         );
+        // ---- Save to localStorage queue ----
+        const savedQueue = JSON.parse(localStorage.getItem("savedQueue")) || [];
+        savedQueue.push({ id: jobId, text, timestamp: Date.now() });
+        localStorage.setItem("savedQueue", JSON.stringify(savedQueue));
         // Start polling with backend jobId
         startPolling(jobId);
       } catch (err) {
@@ -462,6 +532,10 @@ function AppInner({ barkPresets, setBarkPresets }) {
               : item
           )
         );
+        // ---- Save to localStorage queue ----
+        const savedQueue = JSON.parse(localStorage.getItem("savedQueue")) || [];
+        savedQueue.push({ id: jobId, text, timestamp: Date.now() });
+        localStorage.setItem("savedQueue", JSON.stringify(savedQueue));
         // Start polling with backend jobId
         startPolling(jobId);
       } catch (err) {
@@ -476,6 +550,12 @@ function AppInner({ barkPresets, setBarkPresets }) {
       .delete(`http://localhost:5000/cancel/${id}`)
       .catch((err) => console.error(err));
     setQueue((prev) => prev.filter((item) => item.id !== id));
+    // Remove from localStorage queue as well
+    const saved = JSON.parse(localStorage.getItem("savedQueue")) || [];
+    localStorage.setItem(
+      "savedQueue",
+      JSON.stringify(saved.filter((j) => j.id !== id))
+    );
   };
 
   const estimatedTimePerItem = 5;
@@ -590,7 +670,9 @@ function AppInner({ barkPresets, setBarkPresets }) {
         {/* --- Text input and AI Enhance toggle grouped --- */}
         <div className="mb-6">
           <p className="text-base font-semibold mb-2">Add your text</p>
-          <div>
+          <div
+            className={`enhance-input-container${isEnhancing ? " dimmed" : ""}`}
+          >
             {selectedVoiceData?.model?.toLowerCase().includes("bark") ? (
               <TagEditor
                 value={text}
@@ -600,69 +682,101 @@ function AppInner({ barkPresets, setBarkPresets }) {
                 className="w-full p-4 border rounded-xl focus:ring-2 focus:ring-blue-500 min-h-[8rem]"
               />
             ) : (
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                placeholder="Type or paste your narration here"
-                className="w-full p-4 border rounded-xl focus:ring-2 focus:ring-blue-500 min-h-[8rem] resize-none"
-              />
+              <div className="relative">
+                {isEnhancing && (
+                  <div className="absolute inset-0 z-10 bg-gray-100 bg-opacity-60 animate-pulse rounded-xl flex flex-col justify-center p-4 pointer-events-none">
+                    <div className="h-4 bg-gray-300 rounded mb-2 w-3/4"></div>
+                    <div className="h-4 bg-gray-300 rounded mb-2 w-full"></div>
+                    <div className="h-4 bg-gray-300 rounded w-1/2"></div>
+                  </div>
+                )}
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  placeholder="Type or paste your narration here"
+                  className="w-full p-4 border rounded-xl focus:ring-2 focus:ring-blue-500 min-h-[8rem] resize-none relative z-0"
+                />
+              </div>
             )}
           </div>
-          {/* AI Enhance toggle and enhancement pane (only for Bark models) */}
+          {/* AI Enhance options for Bark models (restored original layout) */}
           {selectedVoiceData?.model?.toLowerCase().includes("bark") && (
-            <>
-              <label className="flex items-center gap-3 mb-6 cursor-pointer select-none">
-                <span className="text-sm font-medium">Enable AI Enhance</span>
-                <span className="relative inline-block w-10 align-middle select-none transition duration-200 ease-in">
-                  <input
-                    type="checkbox"
-                    id="ai-enhance-toggle"
-                    className="sr-only"
-                    checked={smartEnhance}
-                    onChange={(e) => setSmartEnhance(e.target.checked)}
-                  />
-                  <span
-                    className={
-                      "block w-10 h-6 rounded-full transition-colors " +
-                      (smartEnhance ? "bg-blue-600" : "bg-gray-300")
-                    }
-                  ></span>
-                  <span
-                    className={
-                      "dot absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition transform " +
-                      (smartEnhance ? "translate-x-4" : "")
-                    }
-                  ></span>
-                </span>
-              </label>
+            <div className="mt-3 mb-2">
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 cursor-pointer select-none mb-0">
+                  <span className="text-sm font-medium">Enable AI Enhance</span>
+                  <span className="relative inline-block w-10 align-middle select-none transition duration-200 ease-in">
+                    <input
+                      type="checkbox"
+                      id="ai-enhance-toggle"
+                      className="sr-only"
+                      checked={smartEnhance}
+                      onChange={(e) => setSmartEnhance(e.target.checked)}
+                    />
+                    <span
+                      className={
+                        "block w-10 h-6 rounded-full transition-colors " +
+                        (smartEnhance ? "bg-blue-600" : "bg-gray-300")
+                      }
+                    ></span>
+                    <span
+                      className={
+                        "dot absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition transform " +
+                        (smartEnhance ? "translate-x-4" : "")
+                      }
+                    ></span>
+                  </span>
+                </label>
+              </div>
+              {/* Show Enhance button and prompt only if enabled */}
               {smartEnhance && (
-                <div className="mb-4">
-                  <label className="block text-xs font-medium mb-1">
-                    Add a prompt to help give the LLM more direction (optional)
-                  </label>
-                  <textarea
-                    className="w-full p-3 border rounded-xl mb-2 focus:ring-2 focus:ring-purple-500 text-sm"
-                    rows={3}
-                    placeholder="Tell the assistant how the narration should feel… e.g. “dramatic and tense”"
-                    value={enhancePrompt}
-                    onChange={(e) => setEnhancePrompt(e.target.value)}
-                    disabled={isEnhancing}
-                  />
-                  <button
-                    type="button"
-                    onClick={runEnhancement}
-                    disabled={isEnhancing || !text.trim()}
-                    className={`px-4 py-2 rounded-lg text-white ${
-                      isEnhancing
-                        ? "bg-gray-400 cursor-wait"
-                        : "bg-purple-600 hover:bg-purple-700"
-                    }`}
-                  >
-                    {isEnhancing ? "Enhancing…" : "AI Enhance"}
-                  </button>
+                <div className="mt-4">
+                  <div className="flex items-end gap-2">
+                    <input
+                      id="ai-enhance-prompt"
+                      type="text"
+                      value={enhancePrompt}
+                      onChange={(e) => setEnhancePrompt(e.target.value)}
+                      placeholder="Enhancement prompt (e.g. Dramatic, add sighs, etc.)"
+                      className="flex-1 p-2 border rounded focus:ring-2 focus:ring-blue-500 text-sm"
+                    />
+                    <button
+                      type="button"
+                      className="px-4 py-2 bg-blue-600 text-white text-sm rounded shadow hover:bg-blue-700 transition disabled:bg-gray-400"
+                      disabled={isEnhancing || !text.trim()}
+                      onClick={runEnhancement}
+                      title="Apply AI enhancement to your text"
+                    >
+                      {isEnhancing ? "Enhancing..." : "Enhance"}
+                    </button>
+                  </div>
+                  <div className="mt-2">
+                    <label
+                      htmlFor="creativity"
+                      className="block mb-1 text-sm font-medium text-gray-900"
+                    >
+                      Creativity
+                    </label>
+                    <input
+                      id="creativity"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={enhanceCreativity}
+                      onChange={(e) =>
+                        setEnhanceCreativity(parseFloat(e.target.value))
+                      }
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>Conservative</span>
+                      <span>Creative</span>
+                    </div>
+                  </div>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
 
@@ -915,12 +1029,26 @@ function AppInner({ barkPresets, setBarkPresets }) {
                   <p className="text-sm font-medium truncate">{item.text}</p>
                   <p className="text-xs text-gray-600">{`Status: ${item.status}`}</p>
                   {item.status !== "done" && (
-                    <div className="w-full bg-gray-200 rounded-full h-2.5 mb-1">
-                      <div
-                        className="bg-blue-500 h-2.5 rounded-full"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
+                    <>
+                      <div className="flex justify-between text-xs mb-1 text-gray-600">
+                        {item.chunkIndex != null && item.totalChunks != null ? (
+                          <>
+                            <span>
+                              Chunk {item.chunkIndex + 1} of {item.totalChunks}
+                            </span>
+                            <span>{progress}%</span>
+                          </>
+                        ) : (
+                          <span>{progress}%</span>
+                        )}
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2.5 mb-1">
+                        <div
+                          className="bg-blue-500 h-2.5 rounded-full"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </>
                   )}
                   {item.status !== "done" && (
                     <button
@@ -933,11 +1061,22 @@ function AppInner({ barkPresets, setBarkPresets }) {
                   {item.status === "done" && item.downloadUrl && (
                     <>
                       <button
-                        onClick={() =>
+                        onClick={() => {
+                          // Remove from queue
                           setQueue((prev) =>
                             prev.filter((q) => q.id !== item.id)
-                          )
-                        }
+                          );
+                          // Remove from localStorage as well
+                          const saved =
+                            JSON.parse(localStorage.getItem("savedQueue")) ||
+                            [];
+                          localStorage.setItem(
+                            "savedQueue",
+                            JSON.stringify(
+                              saved.filter((j) => j.id !== item.id)
+                            )
+                          );
+                        }}
                         className="text-xs text-gray-600 hover:text-black float-right"
                         title="Clear"
                       >
@@ -1056,6 +1195,26 @@ function AppInner({ barkPresets, setBarkPresets }) {
                       />
                     </label>
 
+                    <div className="setting-item">
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={barkSettings.use_mps === true}
+                          onChange={(e) =>
+                            setBarkSettings((prev) => {
+                              const checked = e.target.checked;
+                              localStorage.setItem(
+                                "barkUseMps",
+                                checked.toString()
+                              );
+                              return { ...prev, use_mps: checked };
+                            })
+                          }
+                        />
+                        Use Apple MPS (GPU)
+                      </label>
+                    </div>
+
                     <div className="text-xs text-gray-500">
                       Sentences longer than this limit will be split using
                       natural joiners (like commas or "and") when possible.
@@ -1073,6 +1232,7 @@ function AppInner({ barkPresets, setBarkPresets }) {
                           "barkMaxDuration",
                           barkMaxDuration.toString()
                         );
+                        // Save MPS toggle as well (no-op, already persisted on change)
                         setShowSaveSuccess(true);
                         setTimeout(() => setShowSaveSuccess(false), 2000);
                       }}
@@ -1524,4 +1684,43 @@ function VoiceProfilePanel({ presetList, onApplyProfile }) {
       )}
     </div>
   );
+}
+
+// --- Skeleton loader and dimmed styles ---
+// You may move this to a CSS file as needed
+const style = document.createElement("style");
+style.innerHTML = `
+.skeleton-loader {
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  animation: pulse 1.5s infinite;
+}
+.skeleton-line {
+  height: 10px;
+  background: #ddd;
+  border-radius: 5px;
+  margin: 6px 0;
+}
+.skeleton-line.short {
+  width: 40%;
+}
+.skeleton-line.long {
+  width: 80%;
+}
+.dimmed {
+  opacity: 0.6;
+  pointer-events: none;
+}
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+`;
+if (
+  typeof window !== "undefined" &&
+  !document.getElementById("skeleton-loader-style")
+) {
+  style.id = "skeleton-loader-style";
+  document.head.appendChild(style);
 }

@@ -1,0 +1,39 @@
+{
+  "tag_definitions": {
+    "breath_and_tone": {
+      "sigh": "regret, sorrow, bittersweet memory, release",
+      "gasping": "surprise, shock, awe",
+      "soft": "gentleness, tenderness, vulnerability",
+      "shout": "outrage, alarm, calling out",
+      "whispering": "secrecy, intimacy, fear"
+    },
+    "pauses_and_rhythm": {
+      "pause_short": "natural hesitation, suspense, emotional buildup",
+      "pause_long": "dramatic weight, silence, grief, reflection"
+    },
+    "emotions": {
+      "sad": "grief, mourning, empathy",
+      "angry": "frustration, injustice, betrayal",
+      "excited": "joy, discovery, childlike wonder",
+      "laughs": "amusement, disbelief, irony",
+      "crying": "heartbreak, loss, catharsis"
+    },
+    "other_human_sounds": {
+      "cough": "discomfort, nervousness",
+      "snore": "disinterest, parody (if comedic)",
+      "stomp": "impact, anger, emphasis",
+      "clap": "celebration, emphasis",
+      "crack": "sudden event, surprise",
+      "bark": "sharp command, aggression",
+      "whimper": "fear, sadness, submission",
+      "growl": "anger, menace",
+      "purr": "contentment, affection"
+    }
+  },
+  "emotion_tag_mapping": {
+    "sad": ["[sad]", "[pause_long]"],
+    "thoughtful": ["[pause_short]"],
+    "narrative_transition": ["[pause_short]", "[soft]", "[sigh]"],
+      "contemplative": ["[sigh]", "[whispers]", "[pause_long]"]
+    }
+  }
