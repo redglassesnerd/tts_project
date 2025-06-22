@@ -3,30 +3,6 @@ import { Cog6ToothIcon } from "@heroicons/react/24/outline";
 import axios from "axios";
 import TagEditor from "./TagEditor";
 // VITS-specific fields are now moved into App function.
-// --- Static Bark token list used for in‑editor autocomplete ---
-// (Only used when the selected voice model name contains "bark")
-const BARK_TOKENS = [
-  "laughter",
-  "whisper",
-  "shout",
-  "sigh",
-  "gasp",
-  "cry",
-  "laughs",
-  "breath",
-  "cough",
-  "music",
-  "pause_short",
-  "pause_long",
-  "whispering",
-  "excited",
-  "angry",
-  "sad",
-  "surprised",
-  "singing",
-  "soft",
-  "serious",
-];
 
 // --- MAIN COMPONENT ---
 function AppInner({ barkPresets, setBarkPresets }) {
@@ -47,6 +23,27 @@ function AppInner({ barkPresets, setBarkPresets }) {
   const [speed, setSpeed] = useState(1);
   const [chunkSize, setChunkSize] = useState(300);
   const [pauseDuration, setPauseDuration] = useState(0.5);
+  const [useMps, setUseMps] = useState(() => {
+    try {
+      return localStorage.getItem("barkUseMps") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  // Keep the Apple-Silicon toggle in-sync with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem("barkUseMps", useMps);
+    } catch {
+      /* ignore quota errors */
+    }
+  }, [useMps]);
+
+  // Keep barkSettings.use_mps in-sync with the top-level toggle
+  useEffect(() => {
+    setBarkSettings((prev) => ({ ...prev, use_mps: useMps }));
+  }, [useMps]);
 
   // Bark sentence splitting and max duration (persistent)
   const [barkSplitSentences, setBarkSplitSentences] = useState(() => {
@@ -71,10 +68,20 @@ function AppInner({ barkPresets, setBarkPresets }) {
     try {
       return {
         use_mps: localStorage.getItem("barkUseMps") === "true" ? true : false,
-        // Add other bark settings here if needed
+        smart_enhance:
+          localStorage.getItem("barkSmartEnhance") === "true" ? true : false,
+        small_models:
+          localStorage.getItem("barkSmallModels") === "true" ? true : false,
+        skip_fine:
+          localStorage.getItem("barkSkipFine") === "true" ? true : false,
       };
     } catch {
-      return { use_mps: false };
+      return {
+        use_mps: false,
+        smart_enhance: false,
+        small_models: false,
+        skip_fine: false,
+      };
     }
   });
 
@@ -93,9 +100,15 @@ function AppInner({ barkPresets, setBarkPresets }) {
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState("");
   const [jobProgress, setJobProgress] = useState(0);
-  const [smartEnhance, setSmartEnhance] = useState(false); // offline LLM punctuation
+  // Text-level AI-Enhance toggle (independent of post-processing)
+  const [smartEnhance, setSmartEnhance] = useState(false);
+
   const [enhancePrompt, setEnhancePrompt] = useState("");
   const [isEnhancing, setIsEnhancing] = useState(false);
+
+  // Post-processing (noise-cancelling) flag from Settings modal
+  const postProcessEnhance = barkSettings.smart_enhance || false;
+
   // AI Enhance advanced sliders
   const [enhanceCreativity, setEnhanceCreativity] = useState(0.4);
   const [queue, setQueue] = useState([]);
@@ -174,10 +187,12 @@ function AppInner({ barkPresets, setBarkPresets }) {
 
   const presetList = selectedVoiceData?.presets || [];
 
-  // Resolve tokens list – static list for Bark, empty for others
-  const tokensList = selectedVoiceData?.model?.toLowerCase().includes("bark")
-    ? BARK_TOKENS
-    : [];
+  // Resolve tokens list – use backend-supplied tokens for Bark, empty for others
+  const tokensList =
+    selectedVoiceData?.model?.toLowerCase().includes("bark") &&
+    Array.isArray(selectedVoiceData?.tokens)
+      ? selectedVoiceData.tokens.map((t) => t.replace(/^\[|\]$/g, "")) // strip brackets
+      : [];
 
   /* ---------- Load voices on mount ---------- */
   useEffect(() => {
@@ -211,20 +226,24 @@ function AppInner({ barkPresets, setBarkPresets }) {
           return res.json();
         })
         .then((data) => {
-          setQueue((prev) => [
-            ...prev,
-            {
-              id: job.id,
-              text: job.text,
-              status: data.status,
-              progress: data.progress || 0,
-              downloadUrl: data.audio_url
-                ? `http://localhost:5000${data.audio_url}`
-                : undefined,
-              chunkIndex: data.chunk_index ?? null,
-              totalChunks: data.total_chunks ?? null,
-            },
-          ]);
+          setQueue((prev) => {
+            // Skip if this job is already in the queue
+            if (prev.some((q) => q.id === job.id)) return prev;
+            return [
+              ...prev,
+              {
+                id: job.id,
+                text: job.text,
+                status: data.status,
+                progress: data.progress || 0,
+                downloadUrl: data.audio_url
+                  ? `http://localhost:5000${data.audio_url}`
+                  : undefined,
+                chunkIndex: data.chunk_index ?? null,
+                totalChunks: data.total_chunks ?? null,
+              },
+            ];
+          });
           if (data.status !== "done") {
             startPolling(job.id);
           }
@@ -320,7 +339,10 @@ function AppInner({ barkPresets, setBarkPresets }) {
   /* ---------- Generate ---------- */
   // --- Start polling helper ---
   const startPolling = (jobId) => {
-    if (!jobId) return;
+    if (!jobId) {
+      console.warn("No job ID returned – skipping status polling.");
+      return;
+    }
     const poll = setInterval(() => {
       fetch(`http://localhost:5000/status/${jobId}`)
         .then((res) => res.json())
@@ -412,13 +434,15 @@ function AppInner({ barkPresets, setBarkPresets }) {
         speed,
         chunk_size: chunkSize,
         pause_duration: pauseDuration,
-        smart_enhance: smartEnhance,
+        smart_enhance: postProcessEnhance,
         voice: selectedVoice,
         preset: voicePreset,
         voice_preset: voicePreset,
         language,
         speaker,
-        use_mps: barkSettings.use_mps,
+        use_mps: useMps,
+        small_models: barkSettings.small_models,
+        skip_fine: barkSettings.skip_fine,
         text_temp: barkTemperature,
         focus: barkTopP,
         pool: barkTopK,
@@ -473,7 +497,7 @@ function AppInner({ barkPresets, setBarkPresets }) {
       formData.append("speed", speed);
       formData.append("chunk_size", chunkSize);
       formData.append("pause_duration", pauseDuration);
-      formData.append("smart_enhance", smartEnhance);
+      formData.append("smart_enhance", postProcessEnhance);
 
       if (selectedVoiceData?.model?.toLowerCase().includes("xtts")) {
         formData.append("length_scale", xttsLengthScale);
@@ -503,6 +527,51 @@ function AppInner({ barkPresets, setBarkPresets }) {
         formData.append("voice_preset", voicePreset);
         formData.append("preset", voicePreset); // explicitly include preset
       }
+      // Pass Apple‑Silicon toggle to backend as well
+      formData.append("use_mps", useMps);
+      formData.append("small_models", barkSettings.small_models);
+      formData.append("skip_fine", barkSettings.skip_fine);
+      {
+        /* Small Bark models */
+      }
+      <div className="setting-item">
+        <div className="setting">
+          <label htmlFor="bark-small-toggle">
+            <input
+              type="checkbox"
+              id="bark-small-toggle"
+              checked={barkSettings.small_models}
+              onChange={(e) => {
+                const val = e.target.checked;
+                setBarkSettings((prev) => ({ ...prev, small_models: val }));
+                localStorage.setItem("barkSmallModels", val.toString());
+              }}
+            />{" "}
+            Small&nbsp;Bark&nbsp;models&nbsp;(faster)
+          </label>
+        </div>
+      </div>;
+
+      {
+        /* Skip fine stage */
+      }
+      <div className="setting-item">
+        <div className="setting">
+          <label htmlFor="bark-skipfine-toggle">
+            <input
+              type="checkbox"
+              id="bark-skipfine-toggle"
+              checked={barkSettings.skip_fine}
+              onChange={(e) => {
+                const val = e.target.checked;
+                setBarkSettings((prev) => ({ ...prev, skip_fine: val }));
+                localStorage.setItem("barkSkipFine", val.toString());
+              }}
+            />{" "}
+            Skip&nbsp;fine&nbsp;stage&nbsp;(draft speed)
+          </label>
+        </div>
+      </div>;
 
       try {
         const response = await fetch("http://localhost:5000/generate", {
@@ -567,59 +636,68 @@ function AppInner({ barkPresets, setBarkPresets }) {
   /* ---------- UI ---------- */
   return (
     <>
-      <div className="fixed top-0 left-0 right-0 bg-white shadow-md z-50 px-6 py-3 flex items-center">
-        <h1 className="text-lg font-bold">Voication</h1>
-        <button
-          className="relative text-blue-600 hover:underline ml-6"
-          onClick={() => {
-            setShowQueue((prev) => {
-              if (!prev) setUnreadCompletions(0);
-              return !prev;
-            });
-          }}
-        >
-          <span className="flex items-center gap-2">
-            Queue
-            {/* Spinner if any job in progress */}
-            {queue.some(
-              (item) => item.status !== "done" && item.status !== "error"
-            ) && (
-              <svg
-                className="ml-1 animate-spin h-4 w-4 text-blue-500"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                ></circle>
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                ></path>
-              </svg>
-            )}
-          </span>
-          {/* Unread badge */}
-          {unreadCompletions > 0 && (
-            <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow">
-              {unreadCompletions}
+      <div className="fixed top-0 left-0 right-0 bg-white shadow-md z-50 px-6 py-3 flex items-center justify-between">
+        {/* Queue Button (Left) */}
+        <div className="flex items-center gap-4">
+          <button
+            className="relative text-blue-600 hover:underline"
+            onClick={() => {
+              setShowQueue((prev) => {
+                if (!prev) setUnreadCompletions(0);
+                return !prev;
+              });
+            }}
+          >
+            <span className="flex items-center gap-2">
+              Queue
+              {queue.some(
+                (item) => item.status !== "done" && item.status !== "error"
+              ) && (
+                <svg
+                  className="ml-1 animate-spin h-4 w-4 text-blue-500"
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  ></circle>
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                  ></path>
+                </svg>
+              )}
             </span>
-          )}
-        </button>
-        <button
-          onClick={() => setShowSettings(true)}
-          className="ml-auto text-gray-500 hover:text-gray-700 transition"
-          title="Settings"
-        >
-          <Cog6ToothIcon className="h-6 w-6" />
-        </button>
+            {unreadCompletions > 0 && (
+              <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center shadow">
+                {unreadCompletions}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Center Title */}
+        <h1 className="text-lg font-bold absolute left-1/2 transform -translate-x-1/2">
+          Voiccation
+        </h1>
+
+        {/* Settings Button (Right) */}
+        <div className="ml-auto">
+          <button
+            onClick={() => setShowSettings(true)}
+            className="text-gray-500 hover:text-gray-700 transition"
+            title="Settings"
+          >
+            <Cog6ToothIcon className="h-6 w-6" />
+          </button>
+        </div>
       </div>
       <div className="h-[60px]" />
       <div className="relative p-6 max-w-2xl mx-auto bg-white shadow-xl rounded-2xl mt-8">
@@ -999,7 +1077,7 @@ function AppInner({ barkPresets, setBarkPresets }) {
         })()}
 
         {showQueue && (
-          <div className="fixed right-0 top-0 w-96 max-w-full h-full bg-white shadow-lg p-4 overflow-y-auto z-50 border-l border-gray-200">
+          <div className="fixed left-0 top-0 w-96 max-w-full h-full bg-white shadow-lg p-4 overflow-y-auto z-50 border-l border-gray-200">
             <h2 className="text-lg font-bold mb-4">Queue</h2>
             <button
               onClick={() => setShowQueue(false)}
@@ -1110,6 +1188,23 @@ function AppInner({ barkPresets, setBarkPresets }) {
             {/* Sidebar */}
             <div className="w-1/4 bg-gray-100 p-4 border-r rounded-l">
               <h3 className="text-xs font-semibold text-gray-600 uppercase mb-4">
+                Voication
+              </h3>
+              <ul className="space-y-2">
+                <li>
+                  <button
+                    onClick={() => setSettingsTab("voicationSetting")}
+                    className={`w-full text-left px-3 py-2 rounded ${
+                      settingsTab === "voicationSettings"
+                        ? "bg-white shadow font-semibold"
+                        : "hover:bg-gray-200"
+                    }`}
+                  >
+                    Setting
+                  </button>
+                </li>
+              </ul>
+              <h3 className="text-xs font-semibold text-gray-600 uppercase mb-4">
                 Voice Models
               </h3>
               <ul className="space-y-2">
@@ -1153,7 +1248,35 @@ function AppInner({ barkPresets, setBarkPresets }) {
             </div>
 
             {/* Content Area */}
+
             <div className="w-3/4 p-6">
+              {/* Dark mode toggle (voicationSetting) */}
+              {/* Dark mode toggle (voicationSetting) */}
+              {settingsTab === "voicationSetting" && (
+                <>
+                  <h2 className="text-xl font-semibold mb-4">
+                    Voication Setting
+                  </h2>
+                  <div className="space-y-4">
+                    <label className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        className="toggle"
+                        checked={darkMode}
+                        onChange={() => {
+                          const updated = !darkMode;
+                          setDarkMode(updated);
+                          localStorage.setItem(
+                            "voicationSetting",
+                            JSON.stringify({ darkMode: updated })
+                          );
+                        }}
+                      />
+                      <span>Dark Mode</span>
+                    </label>
+                  </div>
+                </>
+              )}
               {settingsTab === "bark" && (
                 <>
                   <h2 className="text-xl font-semibold mb-4">Bark Settings</h2>
@@ -1195,24 +1318,96 @@ function AppInner({ barkPresets, setBarkPresets }) {
                       />
                     </label>
 
+                    {/* Small Bark models */}
                     <div className="setting-item">
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={barkSettings.use_mps === true}
-                          onChange={(e) =>
-                            setBarkSettings((prev) => {
-                              const checked = e.target.checked;
+                      <div className="setting">
+                        <label htmlFor="bark-small-toggle">
+                          <input
+                            type="checkbox"
+                            id="bark-small-toggle"
+                            checked={barkSettings.small_models}
+                            onChange={(e) => {
+                              const val = e.target.checked;
+                              setBarkSettings((prev) => ({
+                                ...prev,
+                                small_models: val,
+                              }));
                               localStorage.setItem(
-                                "barkUseMps",
-                                checked.toString()
+                                "barkSmallModels",
+                                val.toString()
                               );
-                              return { ...prev, use_mps: checked };
-                            })
-                          }
-                        />
-                        Use Apple MPS (GPU)
-                      </label>
+                            }}
+                          />{" "}
+                          Small Bark models&nbsp;(faster, lower VRAM)
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Skip fine stage */}
+                    <div className="setting-item">
+                      <div className="setting">
+                        <label htmlFor="bark-skipfine-toggle">
+                          <input
+                            type="checkbox"
+                            id="bark-skipfine-toggle"
+                            checked={barkSettings.skip_fine}
+                            onChange={(e) => {
+                              const val = e.target.checked;
+                              setBarkSettings((prev) => ({
+                                ...prev,
+                                skip_fine: val,
+                              }));
+                              localStorage.setItem(
+                                "barkSkipFine",
+                                val.toString()
+                              );
+                            }}
+                          />{" "}
+                          Skip fine stage&nbsp;(draft speed boost)
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="setting-item">
+                      <div className="setting">
+                        <label>
+                          <input
+                            type="checkbox"
+                            id="bark-use-mps"
+                            checked={useMps}
+                            onChange={(e) => setUseMps(e.target.checked)}
+                          />
+                          Use MPS (Apple Silicon)
+                        </label>
+                      </div>
+                    </div>
+                    {/* Smart Enhance (Post-Processing) */}
+                    <div className="setting-item">
+                      <div className="setting">
+                        <label htmlFor="bark-smart-post-toggle">
+                          <input
+                            type="checkbox"
+                            id="bark-smart-post-toggle"
+                            checked={barkSettings.smart_enhance}
+                            onChange={(e) => {
+                              const val = e.target.checked;
+                              setBarkSettings((prev) => ({
+                                ...prev,
+                                smart_enhance: val,
+                              }));
+                              try {
+                                localStorage.setItem(
+                                  "barkSmartEnhance",
+                                  val.toString()
+                                );
+                              } catch {
+                                /* ignore quota errors */
+                              }
+                            }}
+                          />
+                          Smart Enhance&nbsp;(Post‑Processing)
+                        </label>
+                      </div>
                     </div>
 
                     <div className="text-xs text-gray-500">
@@ -1281,13 +1476,36 @@ function AppInner({ barkPresets, setBarkPresets }) {
 // Bark voice presets are now loaded dynamically from backend for consistency.
 function AppInnerWrapper() {
   const [barkPresets, setBarkPresets] = useState({});
+  // Dark mode state
+  const [darkMode, setDarkMode] = useState(false);
   useEffect(() => {
     fetch("/voices")
       .then((res) => res.json())
       .then((data) => setBarkPresets(data))
       .catch((err) => console.error("Failed to fetch voice presets", err));
   }, []);
-  return <AppInner barkPresets={barkPresets} setBarkPresets={setBarkPresets} />;
+  // Load dark mode from localStorage "voicationSetting" on mount
+  useEffect(() => {
+    const stored = localStorage.getItem("voicationSetting");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed.darkMode === "boolean") {
+          setDarkMode(parsed.darkMode);
+        }
+      } catch (e) {
+        console.warn("Failed to parse voicationSetting:", e);
+      }
+    }
+  }, []);
+  return (
+    <AppInner
+      barkPresets={barkPresets}
+      setBarkPresets={setBarkPresets}
+      darkMode={darkMode}
+      setDarkMode={setDarkMode}
+    />
+  );
 }
 
 // Top-level error boundary for debugging

@@ -16,16 +16,16 @@ export default function TagEditor({
   placeholder = "",
   className = "",
 }) {
-  const edRef   = useRef(null);
-  const [popup, setPopup]     = useState(false);   // show dropdown?
+  const edRef = useRef(null);
+  const [popup, setPopup] = useState(false); // show dropdown?
 
   // whenever we open the dropdown, clear previous filter
   useEffect(() => {
     if (popup) setFilter("");
   }, [popup]);
 
-  const [filter, setFilter]   = useState("");      // text after “[”
-  const [pos, setPos]         = useState({ x: 0, y: 0 });
+  const [filter, setFilter] = useState(""); // text after “[”
+  const [pos, setPos] = useState({ x: 0, y: 0 });
 
   // Compute caret coordinates relative to the editable container
   const getRelativeCaretPos = () => {
@@ -39,7 +39,7 @@ export default function TagEditor({
       const caretRect = rects[0];
       return {
         x: caretRect.left - containerRect.left + edRef.current.scrollLeft,
-        y: caretRect.bottom - containerRect.top + edRef.current.scrollTop
+        y: caretRect.bottom - containerRect.top + edRef.current.scrollTop,
       };
     }
     // fallback to bottom-left of container
@@ -104,7 +104,7 @@ export default function TagEditor({
     range.collapse(false);
     sel.removeAllRanges();
     sel.addRange(range);
-    commit(false);     // only update parent value, keep current DOM to avoid stray “x”
+    commit(false); // only update parent value, keep current DOM to avoid stray “x”
     setPopup(false);
   };
 
@@ -121,13 +121,13 @@ export default function TagEditor({
       }
       if (e.key === "Backspace") {
         e.preventDefault();
-        setFilter(f => f.slice(0, -1));
+        setFilter((f) => f.slice(0, -1));
         setPopup(true);
         return;
       }
       if (e.key.length === 1 && /[A-Za-z0-9_-]/.test(e.key)) {
         e.preventDefault();
-        setFilter(f => f + e.key);
+        setFilter((f) => f + e.key);
         setPopup(true);
         return;
       }
@@ -152,7 +152,7 @@ export default function TagEditor({
 
   const handlePaste = (e) => {
     e.preventDefault();
-    const pastedText = e.clipboardData.getData('text');
+    const pastedText = e.clipboardData.getData("text");
     // if user pasted exactly “[token]”, insert as a pill
     const m = pastedText.match(/^\[([^\[\]\s]+)\]$/);
     if (m && tokens.includes(m[1])) {
@@ -160,7 +160,7 @@ export default function TagEditor({
       return;
     }
     // otherwise fallback to plain insertion and update value
-    document.execCommand('insertText', false, pastedText);
+    document.execCommand("insertText", false, pastedText);
     commit(false);
   };
 
@@ -182,14 +182,11 @@ export default function TagEditor({
         onClick={click}
         onPaste={handlePaste}
         onInput={() => commit(false)}
-      >
-      </div>
+      ></div>
 
       {/* overlay placeholder (outside contentEditable to avoid React DOM conflicts) */}
       {!value && (
-        <div
-          className="absolute inset-0 p-4 text-gray-400 pointer-events-none select-none whitespace-pre-wrap"
-        >
+        <div className="absolute inset-0 p-4 text-gray-400 pointer-events-none select-none whitespace-pre-wrap">
           {placeholder}
         </div>
       )}
