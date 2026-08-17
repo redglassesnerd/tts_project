@@ -72,5 +72,15 @@ yarn-debug.log*
 yarn-error.log*
 
 # Environment dumps
-.env
+backend/assets/voice_library/temp_downloads/
+backend/assets/voice_library/temp_freesound/
+backend/assets/voice_library/*.ogg
+backend/assets/voice_library/*.mp3
+backend/assets/voice_library/test_*
+frontend/src/test_*
+
+
+
+
+
 
