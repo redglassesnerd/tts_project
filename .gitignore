@@ -13,7 +13,8 @@ venv/
 
 # Audio/output
 output/
-*.wav
+!backend/assets/voice_library/*.wav
+
 
 # Env
 .envbackend/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf

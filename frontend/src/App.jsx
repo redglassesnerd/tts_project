@@ -162,26 +162,26 @@ function AppInner({ barkPresets, setBarkPresets, darkMode, setDarkMode, initialC
 
   const [clonedProfiles, setClonedProfiles] = useState(() => {
     const DEFAULT_REFERENCES = [
-      { name: "Australian Corporate Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_corporate", transcript: "Good morning and welcome to the quarterly strategy briefing. Sarah Perry here presenting our sustainable development updates across the territory." },
-      { name: "Australian Casual Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_casual", transcript: "G'day mate, how's it going? Sarah was taking a look down by the domed observation window earlier, catching up on the morning routine." },
-      { name: "Australian Dramatic Narrator Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_narrator", transcript: "Six years and six months after departure. The domed glass observation window hummed softly against the vast quiet of the sky." },
-      { name: "Australian Deep Cinematic Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_deep", transcript: "Kepler's tower stood tall against the Blue Mountains horizon. A fortress forged in desperate times." },
-      { name: "Australian High-Energy Promo Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_promo", transcript: "Get ready for the ultimate skyward adventure! Join us live as we explore the rebuilt Alps community." },
-      { name: "Australian Wise Elder Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_elderly", transcript: "I remember the old world before the eye of the storm expanded. We had choices back then, true proxy salvation." },
-      { name: "Australian Podcast Host Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_podcast", transcript: "Welcome back to Mother of the Sky! Today we're diving into radio signals, commune politics, and survival tactics." },
-      { name: "Australian Tech Specialist Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_tech", transcript: "The cyclical food system recycles human waste into fertilizer and soil to keep the hydroponic greens growing." },
-      { name: "Australian Children Storyteller Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_story", transcript: "Deep within the blue marble valley, Kimmy helped tend to the wheat grass every morning with care and diligence." },
-      { name: "Australian Outback Adventurer Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_outback", transcript: "Out here in the rugged mountains, you grip the radio tight and listen out for any craft crossing the horizon." },
-      { name: "British RP Female (Reference)", type: "reference", voiceLibraryKey: "british_female_rp", transcript: "Sarah Perry was a veterinary nurse of exceptional distinction, residing near the Duke Street Tower in North Square." },
-      { name: "British Classic Aristocrat Male (Reference)", type: "reference", voiceLibraryKey: "british_male_classic", transcript: "Indeed, the exclusive community of thinkers and creators represents the pinnacle of human ingenuity." },
-      { name: "British Casual London Female (Reference)", type: "reference", voiceLibraryKey: "british_female_casual", transcript: "Cheers for tuning in! Mind the step as we head up to the main observation deck." },
-      { name: "American West Coast Female (Reference)", type: "reference", voiceLibraryKey: "american_female_warm", transcript: "Hey everyone, thanks for joining. Let's take a deep breath and start our morning practice together." },
-      { name: "American Deep Broadcast Male (Reference)", type: "reference", voiceLibraryKey: "american_male_broadcast", transcript: "This is Mother of the Sky Radio, broadcasting live on all emergency frequencies." },
-      { name: "American Soft Southern Female (Reference)", type: "reference", voiceLibraryKey: "american_female_southern", transcript: "Well now, isn't that just a sight to behold from all the way up here in the clouds." },
-      { name: "Scottish Dramatic Character Male (Reference)", type: "reference", voiceLibraryKey: "scottish_male_dramatic", transcript: "Across the highland peaks, the wind howls loud, but our resolve remains unbroken!" },
-      { name: "Irish Lyrical Storyteller Female (Reference)", type: "reference", voiceLibraryKey: "irish_female_story", transcript: "Listen closely to the crackle of the radio signal, carrying tales from across the emerald waves." },
-      { name: "New Zealand Kiwi Guide Male (Reference)", type: "reference", voiceLibraryKey: "kiwi_male_guide", transcript: "Kia ora! We're tracking the small crafts moving freely between the floating communes today." },
-      { name: "Canadian Documentary Female (Reference)", type: "reference", voiceLibraryKey: "canadian_female_doc", transcript: "Observations over the past four hundred kilometers reveal a unique atmospheric phenomenon." }
+      { name: "Australian Corporate Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_corporate", transcript: "Hello, I've just recently opened up an account with your bank and I wanted to find out how I can go about paying bills using my savings account." },
+      { name: "Australian Casual Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_casual", transcript: "Hey mate, calling about my bill that's due. I want to pay it, can I do that over the phone? Thank you." },
+      { name: "Australian Dramatic Narrator Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_narrator", transcript: "I've just received my gas bill and I'd like to know how to pay using my internet banking. Are you able to assist?" },
+      { name: "Australian Deep Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_deep", transcript: "Good afternoon. Look, I've got my credit card bill due, statement's come in and I'd just like to make a payment on that, thank you." },
+      { name: "Australian High-Energy Promo Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_promo", transcript: "I would like to pay my electricity bill using my card. Can you please assist?" },
+      { name: "Australian Wise Elder Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_elderly", transcript: "Yes, good afternoon. Look, I'd like to stop all transactions on my card for the reason it's been stolen, and ensure no more transactions are on the card, thank you." },
+      { name: "Australian Podcast Host Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_podcast", transcript: "Hello, I'd like to make a payment for a bill that's due in a couple of days. Can you walk me through the steps of how to do that? Thank you." },
+      { name: "Australian Tech Specialist Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_tech", transcript: "Hey there, I'm just calling about making a payment for a bill that I've got coming up. I'm just wondering if you could lend me a hand with that please." },
+      { name: "Australian Children Storyteller Female (Reference)", type: "reference", voiceLibraryKey: "australian_female_story", transcript: "I've just received my credit card bill and I don't understand how you pay it. Can you help me?" },
+      { name: "Australian Outback Adventurer Male (Reference)", type: "reference", voiceLibraryKey: "australian_male_outback", transcript: "Hello, I'd like to pay for a bill. I would actually like to make a payment, could you help me?" },
+      { name: "British RP Female (Reference)", type: "reference", voiceLibraryKey: "british_female_rp", transcript: "Hi, I'm ringing today because I would like to know how to pay a bill on my credit card. Could you please assist me in how I do that? Thank you." },
+      { name: "British Classic Male (Reference)", type: "reference", voiceLibraryKey: "british_male_classic", transcript: "I want to pay a bill, and I want to know how can I use my credit card to do so." },
+      { name: "British Casual London Female (Reference)", type: "reference", voiceLibraryKey: "british_female_casual", transcript: "I would like to pay my bill please. Yeah, I want to make a payment online by direct debit, thank you." },
+      { name: "American West Coast Female (Reference)", type: "reference", voiceLibraryKey: "american_female_warm", transcript: "Hi, I was trying to set up a joint account. Is there somewhere on the app that I can do that, or do I have to do that through you?" },
+      { name: "American Deep Broadcast Male (Reference)", type: "reference", voiceLibraryKey: "american_male_broadcast", transcript: "I would like to set up a joint account with my partner." },
+      { name: "American Soft Southern Female (Reference)", type: "reference", voiceLibraryKey: "american_female_southern", transcript: "I was wanting to set up a joint account with my spouse and I was wondering, do we each get a separate debit card and a separate way of knowing who is accessing it? Thank you." },
+      { name: "Scottish Dramatic Male (Reference)", type: "reference", voiceLibraryKey: "scottish_male_dramatic", transcript: "Could you stop all transactions on my card? Could you please freeze my card? I need you to block my card from any payments or direct debits ongoing." },
+      { name: "Irish Lyrical Storyteller Female (Reference)", type: "reference", voiceLibraryKey: "irish_female_story", transcript: "Hi there. I've lost my card and I just need you to stop all transactions on my card, freeze it or block it. Thank you so much." },
+      { name: "New Zealand Kiwi Guide Male (Reference)", type: "reference", voiceLibraryKey: "kiwi_male_guide", transcript: "Hi, just calling about a bill I have to make a payment on." },
+      { name: "Canadian Documentary Female (Reference)", type: "reference", voiceLibraryKey: "canadian_female_doc", transcript: "My husband and I are trying to set up a joint account. I can see where I set up an account by myself, but I'm not sure where to go to set up a joint account. Can you help me with this please? Thank you." }
     ];
 
     try {
@@ -217,11 +217,18 @@ function AppInner({ barkPresets, setBarkPresets, darkMode, setDarkMode, initialC
           return p;
         });
 
-        // Ensure default reference voices are present
+        // Ensure default reference voices are present and updated with latest authentic transcripts
         DEFAULT_REFERENCES.forEach(ref => {
-          const exists = parsed.some(p => p.voiceLibraryKey === ref.voiceLibraryKey);
-          if (!exists) {
+          const existingIdx = parsed.findIndex(p => p.voiceLibraryKey === ref.voiceLibraryKey);
+          if (existingIdx === -1) {
             parsed.push(ref);
+          } else {
+            parsed[existingIdx] = {
+              ...parsed[existingIdx],
+              name: ref.name,
+              transcript: ref.transcript,
+              type: "reference"
+            };
           }
         });
 
